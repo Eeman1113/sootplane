@@ -3,127 +3,210 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dense Yellow Particle City Sim</title>
-    <style>
-        body { margin: 0; overflow: hidden; background-color: #000; color: white; font-family: 'Consolas', 'Courier New', monospace; font-size: 14px;}
-        canvas { display: block; }
+    <title>Particle City Sim - Collision & HP Tuning</title> <style>
+        /* Basic reset and body styling */
+        body {
+            margin: 0;
+            overflow: hidden; /* Prevent scrollbars */
+            background-color: #000;
+            color: white;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 14px;
+        }
+        /* Ensure canvas takes full screen */
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
         /* Enhanced HUD Styling */
-        .hud { position: absolute; background-color: rgba(0,0,0,0.6); padding: 8px 12px; border-radius: 4px; line-height: 1.5; pointer-events: none; z-index: 10; }
-        #info-controls { top: 10px; left: 10px; }
-        #info-flight { bottom: 10px; left: 10px; min-width: 150px;}
-        #info-status { top: 10px; right: 10px; text-align: right; }
+        .hud {
+            position: absolute;
+            background-color: rgba(0,0,0,0.75); /* Slightly more opaque */
+            padding: 10px 15px;
+            border-radius: 6px;
+            line-height: 1.6;
+            pointer-events: none; /* Don't block mouse events */
+            z-index: 10;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+            font-size: 13px; /* Slightly smaller HUD font */
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        #info-controls { top: 15px; left: 15px; }
+        #info-flight { bottom: 15px; left: 15px; min-width: 170px;} /* Wider for HP */
+        #info-status { top: 15px; right: 15px; text-align: right; }
+
+        /* HP Bar Styling */
+        #hp-bar-container {
+            width: 100px; /* Fixed width */
+            height: 10px;
+            background-color: #555;
+            border: 1px solid #888;
+            border-radius: 3px;
+            overflow: hidden; /* Clip the inner bar */
+            margin-top: 4px;
+        }
+        #hp-bar {
+            width: 100%; /* Start full */
+            height: 100%;
+            background-color: #4CAF50; /* Green */
+            transition: width 0.3s ease-out, background-color 0.3s ease-out; /* Smooth transitions */
+            border-radius: 2px;
+        }
+
+        /* Collision/Crash Warning Styling */
+        #collision-warning {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #ff4444; /* Brighter red */
+            font-size: 2.5em; /* Larger */
+            font-weight: bold;
+            text-shadow: 0 0 8px #000, 0 0 15px red; /* Glow effect */
+            display: none; /* Hidden by default */
+            z-index: 20;
+            pointer-events: none;
+            text-align: center;
+        }
+         #collision-warning small {
+             display: block;
+             font-size: 0.5em;
+             margin-top: 10px;
+             color: #ccc;
+             text-shadow: none;
+         }
 
         /* Loading Overlay Styling */
         #loading-overlay {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            background-color: rgba(0, 0, 0, 0.9); display: flex; flex-direction: column;
+            background-color: rgba(0, 0, 0, 0.95); /* Darker overlay */
+            display: flex; flex-direction: column;
             justify-content: center; align-items: center; z-index: 100;
-            color: #eee; font-size: 1.2em; transition: opacity 0.5s ease-out;
+            color: #eee; font-size: 1.3em;
+            transition: opacity 0.6s ease-out; /* Smoother fade */
         }
-        #loading-message { margin-bottom: 20px; text-align: center; }
-        #progress-bar-container { width: 60%; max-width: 400px; height: 15px; background-color: #555; border-radius: 7px; overflow: hidden; box-shadow: inset 0 1px 3px rgba(0,0,0,0.3); }
-        #progress-bar { width: 0%; height: 100%; background-color: #4CAF50; border-radius: 7px; transition: width 0.2s linear; }
+        #loading-message { margin-bottom: 25px; text-align: center; }
+        #progress-bar-container {
+            width: 70%; max-width: 450px; height: 18px;
+            background-color: #444; /* Darker background */
+            border-radius: 9px; overflow: hidden;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.4);
+        }
+        #progress-bar {
+             width: 0%; height: 100%;
+             background: linear-gradient(90deg, #4CAF50, #8BC34A); /* Gradient */
+             border-radius: 9px;
+             transition: width 0.2s linear;
+        }
         .loading-pulse { animation: pulse 1.5s infinite ease-in-out; }
-        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.7; } 100% { opacity: 1; } }
         #loading-overlay.hidden { opacity: 0; pointer-events: none; }
     </style>
 </head>
 <body>
     <div id="info-controls" class="hud">
-        Controls:<br> Arrows: Pitch/Roll<br> A/D: Yaw<br> W/S: Speed
+        Controls:<br> Arrows: Pitch/Roll<br> A/D: Yaw<br> W/S: Speed<br> R: Reset (after destroyed)
     </div>
     <div id="info-flight" class="hud">
         Speed: <span id="speed-info">0.0</span> kts<br>
         Altitude: <span id="alt-info">0</span> ft<br>
-        Heading: <span id="hdg-info">0</span>&deg;
+        Heading: <span id="hdg-info">0</span>&deg;<br>
+        HP: <div id="hp-bar-container"><div id="hp-bar"></div></div>
     </div>
      <div id="info-status" class="hud">
-        <span id="loading-status">Initializing...</span>
+        Status: <span id="loading-status">Initializing...</span>
     </div>
-
+    <div id="collision-warning">DESTROYED!<br><small>Press R to Reset</small></div>
     <div id="loading-overlay">
-        <div id="loading-message">Initializing...</div>
+        <div id="loading-message">Initializing Simulation...</div>
         <div id="progress-bar-container">
             <div id="progress-bar"></div>
         </div>
     </div>
 
-
     <script type="importmap">
         {
             "imports": {
-                "three": "https://unpkg.com/three@0.163.0/build/three.module.js",
-                "three/addons/": "https://unpkg.com/three@0.163.0/examples/jsm/",
-                "simplex-noise": "https://unpkg.com/simplex-noise@4.0.1/dist/esm/simplex-noise.js"
+                "three": "https://cdn.jsdelivr.net/npm/three@0.163.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.163.0/examples/jsm/",
+                "simplex-noise": "https://cdn.jsdelivr.net/npm/simplex-noise@4.0.1/dist/esm/simplex-noise.js"
             }
         }
     </script>
 
     <script type="module">
+        // ====================================================================
+        // Imports
+        // ====================================================================
         import * as THREE from 'three';
         import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
         import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
         import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
         import { createNoise2D } from 'simplex-noise';
 
-        // --- Noise Instances ---
-        const zoneNoise = createNoise2D(Math.random);
-        const densityNoise = createNoise2D(Math.random);
-
-        // --- Scene Setup ---
-        let scene, camera, renderer, clock, loadingManager;
-        let airplane;
-        let composer;
-
-        // Control & Speed Vars
-        let airplaneSpeed = 10.0; const minSpeed = 5.0; const maxSpeed = 100.0; const acceleration = 15.0;
-        const rotationSpeed = 0.03; const yawSpeed = 0.025; const maxPitch = Math.PI / 4; const maxRoll = Math.PI / 3; const rollRecoverySpeed = 0.03;
-
-        const keys = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false, KeyW: false, KeyS: false, KeyA: false, KeyD: false };
-
-        // --- Infinite Grid (for details other than ground) ---
-        const cellSize = 110;
-        const gridRadius = 4;
-        const roadFrequency = 4;
-        const houseDensity = 0.25;
-        const buildingDensity = 0.6; // Increased building chance
-        const treeDensity = 0.15;
-        const carsPerRoadCell = 5;
-        const peoplePerCell = 10;
-        const activeCells = new Map(); // Stores { roads:[], buildings:[], houses:[], trees:[], cars:[], people:[] }
-        let currentPlayerCellX = Infinity, currentPlayerCellZ = Infinity;
-
+        // ====================================================================
+        // Constants & Configuration
+        // ====================================================================
+        // --- Simulation & World ---
+        const CELL_SIZE = 110; const GRID_RADIUS = 4; const ROAD_FREQUENCY = 4;
+        const GROUND_PLANE_SIZE = 15000; const FOG_DENSITY = 0.0007;
+        const DOWNTOWN_BUILDING_CHANCE = 0.92; const RESIDENTIAL_BUILDING_CHANCE = 0.20;
+        const RESIDENTIAL_HOUSE_CHANCE = 0.55;
+        // --- Airplane Control & HP ---
+        const MIN_SPEED = 5.0; const MAX_SPEED = 100.0; const ACCELERATION = 15.0;
+        const ROTATION_SPEED = 0.03; const YAW_SPEED = 0.025;
+        const MAX_PITCH = Math.PI / 4; const MAX_ROLL = Math.PI / 3;
+        const ROLL_RECOVERY_SPEED = 0.03;
+        const AIRPLANE_COLLISION_SIZE = new THREE.Vector3(8, 3, 7); // Kept small
+        const AIRPLANE_MAX_HP = 300; // Significantly Increased Max HP
+        const COLLISION_DAMAGE = 15; // Significantly Decreased Damage per hit
+        const LOW_HP_THRESHOLD = AIRPLANE_MAX_HP * 0.35;
+        const RESET_COOLDOWN_TIME = 1.0;
+        const COLLISION_DISTANCE_THRESHOLD = 100; // Max distance to check building collision (approx diagonal of cell)
         // --- Particle Counts ---
-        const buildingTotalParticles = 3000;
-        const houseWallParticles = 700; const houseWindowParticles = 80; const houseRoofParticles = 200;
-        const roadParticlesPerCell = 1200; const treeCanopyParticles = 550; const treeTrunkParticles = 55;
-        const carBodyParticles = 120; const carLightParticles = 8; const peopleParticles = 40;
-        // Ground plane particles
-        const groundPlaneSize = 15000; // Large plane size for 'infinite' feel
-        const groundGrassParticles = 500000; // Particles for the ground plane
-        const groundFlowerParticles = 5000;
-
-
-        // --- Materials (Shared Base Properties) ---
-        let particleTexture = null; const sharedMatProps = { size: 1.0, sizeAttenuation: true, alphaTest: 0.5, transparent: true };
-        const normalBlendProps = { blending: THREE.NormalBlending, depthWrite: true }; const additiveBlendProps = { blending: THREE.AdditiveBlending, depthWrite: false };
-
-        // --- Specific Base Materials ---
-        let baseGrassMaterial, baseRoadMaterial, baseTreeCanopyMaterial, baseTreeTrunkMaterial;
-        let baseBuildingMaterial; // Single yellow material for buildings
-        let baseHouseWallMaterial, baseHouseWindowMaterial, baseHouseRoofMaterial;
-        let baseCarBodyMaterial, baseCarLightMaterial; let basePeopleMaterial, baseFlowerMaterial;
-
+        const BUILDING_PARTICLES = 2800; const HOUSE_WALL_PARTICLES = 600;
+        const HOUSE_WINDOW_PARTICLES = 70; const HOUSE_ROOF_PARTICLES = 180;
+        const ROAD_PARTICLES_PER_CELL = 1000; const TREE_CANOPY_PARTICLES = 400;
+        const TREE_TRUNK_PARTICLES = 40; const CAR_BODY_PARTICLES = 100;
+        const CAR_LIGHT_PARTICLES = 8; const PEOPLE_PARTICLES = 30;
+        const GROUND_GRASS_PARTICLES = 400000; const GROUND_FLOWER_PARTICLES = 4000;
+        const EXPLOSION_PARTICLES = 2000; const EXPLOSION_DURATION = 2.0;
+        const EXPLOSION_SPEED = 100; const FIRE_PARTICLES = 300;
+        const SMOKE_PARTICLES_PER_EMIT = 5; const SMOKE_EMIT_INTERVAL = 0.05;
+        const SMOKE_PARTICLE_LIFETIME = 2.5;
+        // --- Materials & Blending ---
+        const SHARED_MAT_PROPS = { size: 1.0, sizeAttenuation: true, alphaTest: 0.5, transparent: true };
+        const NORMAL_BLEND_PROPS = { blending: THREE.NormalBlending, depthWrite: true };
+        const ADDITIVE_BLEND_PROPS = { blending: THREE.AdditiveBlending, depthWrite: false };
         // --- Color Palettes ---
-        const houseWallColors = [ new THREE.Color(0xD2691E), new THREE.Color(0xCD853F), new THREE.Color(0xF4A460), new THREE.Color(0xDEB887), new THREE.Color(0xFFE4C4) ];
-        const houseRoofColors = [ new THREE.Color(0x555555), new THREE.Color(0x444444), new THREE.Color(0x696969), new THREE.Color(0x778899) ];
-        const treeCanopyColors = [ new THREE.Color(0x228B22), new THREE.Color(0x556B2F), new THREE.Color(0x006400), new THREE.Color(0x6B8E23) ];
-        const carBodyColors = [ new THREE.Color(0xFF0000), new THREE.Color(0x0000FF), new THREE.Color(0xFFFFFF), new THREE.Color(0x333333), new THREE.Color(0xCCCCCC), new THREE.Color(0x008080) ];
-        const peopleColors = [ new THREE.Color(0xFF00FF), new THREE.Color(0x00FFFF), new THREE.Color(0xFFA500), new THREE.Color(0xADFF2F), new THREE.Color(0xEE82EE) ];
-        const flowerColors = [ new THREE.Color(0xFF69B4), new THREE.Color(0x1E90FF), new THREE.Color(0xFFD700), new THREE.Color(0xBA55D3)];
+        const HOUSE_WALL_COLORS = [ new THREE.Color(0xD2691E), new THREE.Color(0xCD853F), new THREE.Color(0xF4A460), new THREE.Color(0xDEB887), new THREE.Color(0xFFE4C4) ];
+        const HOUSE_ROOF_COLORS = [ new THREE.Color(0x555555), new THREE.Color(0x444444), new THREE.Color(0x696969), new THREE.Color(0x778899) ];
+        const TREE_CANOPY_COLORS = [ new THREE.Color(0x228B22), new THREE.Color(0x556B2F), new THREE.Color(0x006400), new THREE.Color(0x6B8E23) ];
+        const CAR_BODY_COLORS = [ new THREE.Color(0xFF0000), new THREE.Color(0x0000FF), new THREE.Color(0xFFFFFF), new THREE.Color(0x333333), new THREE.Color(0xCCCCCC), new THREE.Color(0x008080) ];
+        const PEOPLE_COLORS = [ new THREE.Color(0xFF00FF), new THREE.Color(0x00FFFF), new THREE.Color(0xFFA500), new THREE.Color(0xADFF2F), new THREE.Color(0xEE82EE) ];
+        const FLOWER_COLORS = [ new THREE.Color(0xFF69B4), new THREE.Color(0x1E90FF), new THREE.Color(0xFFD700), new THREE.Color(0xBA55D3)];
+        const EXPLOSION_INITIAL_COLOR = new THREE.Color(0xffaa33);
+        const FIRE_COLOR_START = new THREE.Color(0xff4500); const FIRE_COLOR_END = new THREE.Color(0xffa500);
+        const SMOKE_COLOR = new THREE.Color(0x222222);
+        // --- Unit Conversion ---
+        const SPEED_UNIT_FACTOR = 1.944; const ALT_UNIT_FACTOR = 3.281;
 
-
-        // --- DOM Element References ---
+        // ====================================================================
+        // Global Variables
+        // ====================================================================
+        let scene, camera, renderer, clock, loadingManager, composer;
+        let particleTexture = null; let airplane; let airplaneController;
+        let explosionManager; let smokeTrailManager;
+        const activeCells = new Map();
+        let currentPlayerCellX = Infinity, currentPlayerCellZ = Infinity;
+        let isInitializationComplete = false; // Flag to control animation loop updates
+        const zoneNoise = createNoise2D(Math.random); const densityNoise = createNoise2D(Math.random);
+        let baseGrassMaterial, baseRoadMaterial, baseTreeCanopyMaterial, baseTreeTrunkMaterial;
+        let baseBuildingMaterial, baseHouseWallMaterial, baseHouseWindowMaterial, baseHouseRoofMaterial;
+        let baseCarBodyMaterial, baseCarLightMaterial, basePeopleMaterial, baseFlowerMaterial;
+        let baseExplosionMaterial, baseFireMaterial, baseSmokeMaterial;
+        const keys = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false, KeyW: false, KeyS: false, KeyA: false, KeyD: false, KeyR: false };
         const loadingOverlay = document.getElementById('loading-overlay');
         const loadingMessage = document.getElementById('loading-message');
         const progressBar = document.getElementById('progress-bar');
@@ -131,421 +214,698 @@
         const speedInfoElement = document.getElementById('speed-info');
         const altInfoElement = document.getElementById('alt-info');
         const hdgInfoElement = document.getElementById('hdg-info');
+        const hpBarElement = document.getElementById('hp-bar');
+        const collisionWarningElement = document.getElementById('collision-warning');
+        const tempVector3 = new THREE.Vector3(); const forwardVector = new THREE.Vector3();
+        const projectedVector = new THREE.Vector3(); const airplaneBBox = new THREE.Box3();
+        const buildingBBox = new THREE.Box3(); // Reusable Box3 for building checks
 
-        // Conversion factors & Temp vectors
-        const SPEED_UNIT_FACTOR = 1.944; const ALT_UNIT_FACTOR = 3.281;
-        const forwardVector = new THREE.Vector3(); const projectedVector = new THREE.Vector3();
+        // ====================================================================
+        // Airplane Controller Class
+        // ====================================================================
+        class AirplaneController {
+             constructor(airplaneObject) {
+                 this.airplane = airplaneObject;
+                 this.speed = MIN_SPEED;
+                 this.maxHp = AIRPLANE_MAX_HP; // Using updated constant
+                 this.currentHp = this.maxHp;
+                 this.isDestroyed = false;
+                 this.resetCooldown = 0;
+                 this.initialPosition = airplaneObject.position.clone();
+                 this.initialRotation = airplaneObject.rotation.clone();
+                 this.fireEffect = null;
+                 this.lastSmokeEmitTime = 0;
+                 this.lowHpStateActive = false; // Track if effects *should* be on
+             }
 
-        function init() {
-             loadingOverlay.classList.remove('hidden');
-             loadingMessage.textContent = 'Initializing...';
-             progressBar.style.width = '0%';
+             createFireEffect() {
+                 if (this.fireEffect) return;
+                 if (!baseFireMaterial) { console.error("Cannot create fire effect: baseFireMaterial not ready."); return; }
+                 try {
+                     const geometry = new THREE.BufferGeometry();
+                     const positions = []; const colors = [];
+                     for (let i = 0; i < FIRE_PARTICLES; i++) {
+                         positions.push( (Math.random() - 0.5) * 1.5, (Math.random() - 0.5) * 1.0, Math.random() * 2.0 + 1.0 );
+                         const lerpFactor = Math.random();
+                         const color = FIRE_COLOR_START.clone().lerp(FIRE_COLOR_END, lerpFactor);
+                         colors.push(color.r, color.g, color.b);
+                     }
+                     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+                     geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+                     this.fireEffect = new THREE.Points(geometry, baseFireMaterial);
+                     this.fireEffect.visible = false;
+                     this.airplane.add(this.fireEffect);
+                     console.log("Fire effect created and attached.");
+                 } catch (error) { console.error("Error creating fire effect:", error); }
+             }
 
-            loadingManager = new THREE.LoadingManager(
-                () => { // onLoad
-                    console.log('Assets loaded!');
-                    progressBar.style.width = '100%';
-                    loadingMessage.textContent = 'Generating Scenery... Please Wait...';
-                    progressBar.classList.add('loading-pulse');
+             reset() {
+                 this.airplane.position.copy(this.initialPosition);
+                 this.airplane.rotation.copy(this.initialRotation);
+                 this.speed = MIN_SPEED;
+                 this.currentHp = this.maxHp;
+                 this.isDestroyed = false;
+                 this.resetCooldown = 0;
+                 this.airplane.visible = true;
+                 if (this.fireEffect) this.fireEffect.visible = false;
+                 if (smokeTrailManager) smokeTrailManager.clearAllParticles();
+                 if (collisionWarningElement) collisionWarningElement.style.display = 'none'; // Check if exists
+                 if (loadingStatusElement) loadingStatusElement.textContent = 'Ready'; // Check if exists
+                 this.lowHpStateActive = false; // Reset effect state flag
+                 this.updateHUD();
+                 console.log("Airplane Reset.");
+             }
 
-                    // Create Base Materials
-                    sharedMatProps.map = particleTexture;
-                    baseGrassMaterial = new THREE.PointsMaterial({ ...sharedMatProps, color: 0x4CAF50, ...normalBlendProps, size: 1.2 });
-                    baseFlowerMaterial = new THREE.PointsMaterial({ ...sharedMatProps, size: 0.8, ...normalBlendProps });
-                    baseRoadMaterial = new THREE.PointsMaterial({ ...sharedMatProps, color: 0x333333, size: 0.8, ...normalBlendProps });
-                    baseTreeCanopyMaterial = new THREE.PointsMaterial({ ...sharedMatProps, size: 1.5, ...normalBlendProps });
-                    baseTreeTrunkMaterial = new THREE.PointsMaterial({ ...sharedMatProps, color: 0x8B4513, size: 0.6, ...normalBlendProps });
-                    baseBuildingMaterial = new THREE.PointsMaterial({ ...sharedMatProps, color: 0xFFFF00, size: 1.5, ...additiveBlendProps });
-                    baseHouseWallMaterial = new THREE.PointsMaterial({ ...sharedMatProps, size: 1.0, ...normalBlendProps });
-                    baseHouseWindowMaterial = new THREE.PointsMaterial({ ...sharedMatProps, color: 0xFFFFE0, size: 1.2, ...additiveBlendProps });
-                    baseHouseRoofMaterial = new THREE.PointsMaterial({ ...sharedMatProps, size: 0.9, ...normalBlendProps });
-                    baseCarBodyMaterial = new THREE.PointsMaterial({ ...sharedMatProps, size: 0.7, ...normalBlendProps });
-                    baseCarLightMaterial = new THREE.PointsMaterial({ ...sharedMatProps, color: 0xFFFFFF, size: 1.0, ...additiveBlendProps });
-                    basePeopleMaterial = new THREE.PointsMaterial({ ...sharedMatProps, size: 0.9, ...normalBlendProps });
-
-                    // Create the single large ground plane FIRST
-                    createInfiniteGround();
-
-                    setupPostProcessing();
-
-                    // Perform Initial Grid Generation for details
-                    setTimeout(() => {
-                        updateInfiniteGrid();
-                        console.log('Initial detail grid generated.');
-                        loadingOverlay.classList.add('hidden');
-                        loadingStatusElement.textContent = 'Ready';
-                    }, 50);
-
-                },
-                (url, itemsLoaded, itemsTotal) => { // onProgress
-                    const progress = Math.round((itemsLoaded / itemsTotal) * 100);
-                    progressBar.style.width = progress + '%';
-                    loadingMessage.textContent = `Loading Assets: ${progress}%`;
-                },
-                (url) => { // onError
-                     console.error('Error loading file:', url);
-                     loadingMessage.textContent = `Error loading: ${url}. Please refresh.`;
-                     loadingStatusElement.textContent = 'Error!';
-                     progressBar.style.backgroundColor = '#ff0000';
-                     progressBar.classList.remove('loading-pulse');
+             takeDamage(amount) {
+                 if (this.isDestroyed) return;
+                 this.currentHp -= amount;
+                 this.currentHp = Math.max(0, this.currentHp);
+                 console.log(`Airplane took ${amount} damage. HP: ${this.currentHp}/${this.maxHp}`);
+                 this.updateHUD(); // Update HP bar display
+                 if (this.currentHp <= 0) {
+                     this.handleDestruction();
                  }
-            );
+             }
 
-            // Load Particle Texture
-            const textureLoader = new THREE.TextureLoader(loadingManager);
-            particleTexture = textureLoader.load('https://threejs.org/examples/textures/sprites/disc.png');
+             handleCollision(collidedObject) { // Now receives the object it collided with
+                 if (this.isDestroyed) return;
+                 // Log details about the collision
+                 console.warn(`Collision Detected! Plane Pos: ${this.airplane.position.toArray().map(p=>p.toFixed(1)).join(',')}, Object Pos: ${collidedObject.position.toArray().map(p=>p.toFixed(1)).join(',')}, Object Type: ${collidedObject.userData.type || 'Unknown'}`);
+                 this.takeDamage(COLLISION_DAMAGE); // Using updated constant
+             }
 
-            // --- Basic Scene Setup ---
-            scene = new THREE.Scene();
-            scene.fog = new THREE.FogExp2(0x000000, 0.0008);
-            clock = new THREE.Clock();
-            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.5, 10000);
-            camera.position.set(0, 70, 130);
-            camera.lookAt(0, 0, 0);
+             handleDestruction() {
+                 if (this.isDestroyed) return;
+                 console.log("AIRPLANE DESTROYED!");
+                 this.isDestroyed = true;
+                 this.resetCooldown = RESET_COOLDOWN_TIME;
+                 this.speed = 0;
+                 if (explosionManager) explosionManager.createExplosion(this.airplane.position.clone());
+                 this.airplane.visible = false;
+                 if (this.fireEffect) this.fireEffect.visible = false;
+                 if (collisionWarningElement) collisionWarningElement.style.display = 'block'; // Check if exists
+                 if (loadingStatusElement) loadingStatusElement.textContent = 'Destroyed!'; // Check if exists
+                 this.lowHpStateActive = false; // Ensure effects are off
+             }
 
-            renderer = new THREE.WebGLRenderer({ antialias: true });
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.setPixelRatio(window.devicePixelRatio);
-            renderer.toneMapping = THREE.ACESFilmicToneMapping;
-            renderer.toneMappingExposure = 1.0;
-            renderer.outputColorSpace = THREE.SRGBColorSpace;
-            renderer.shadowMap.enabled = false;
-            document.body.appendChild(renderer.domElement);
+             update(deltaTime) {
+                  if (this.isDestroyed && this.resetCooldown > 0) this.resetCooldown -= deltaTime;
+                  if (this.isDestroyed && this.resetCooldown <= 0 && keys.KeyR) { this.reset(); return; }
+                  if (this.isDestroyed) return;
 
-            // Lighting
-            const ambientLight = new THREE.AmbientLight(0x505050);
-            scene.add(ambientLight);
-            const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
-            dirLight.position.set(70, 120, 60);
-            scene.add(dirLight);
+                 // --- Normal Flight / Damaged State ---
+                 let speedChange = 0;
+                 if (keys.KeyW) speedChange += ACCELERATION * deltaTime; if (keys.KeyS) speedChange -= ACCELERATION * deltaTime;
+                 this.speed += speedChange; this.speed = Math.max(MIN_SPEED, Math.min(MAX_SPEED, this.speed));
 
-            scene.background = new THREE.Color(0x000000);
+                 let targetPitch = this.airplane.rotation.x; let targetRoll = this.airplane.rotation.z; let yawChange = 0;
+                 if (keys.ArrowUp) targetPitch -= ROTATION_SPEED; if (keys.ArrowDown) targetPitch += ROTATION_SPEED;
+                 targetPitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, targetPitch));
+                 this.airplane.rotation.x += (targetPitch - this.airplane.rotation.x) * 0.1;
+                 if (keys.ArrowLeft) targetRoll += ROTATION_SPEED; if (keys.ArrowRight) targetRoll -= ROTATION_SPEED;
+                 targetRoll = Math.max(-MAX_ROLL, Math.min(MAX_ROLL, targetRoll));
+                 if (!keys.ArrowLeft && !keys.ArrowRight) targetRoll -= this.airplane.rotation.z * ROLL_RECOVERY_SPEED;
+                 this.airplane.rotation.z += (targetRoll - this.airplane.rotation.z) * 0.1;
+                 if (keys.KeyA) yawChange += YAW_SPEED; if (keys.KeyD) yawChange -= YAW_SPEED;
+                 this.airplane.rotateY(yawChange);
 
-            // Airplane
-            airplane = new THREE.Group();
-            const planeMaterial = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.7, roughness: 0.5, emissive: new THREE.Color(0x00ffff), emissiveIntensity: 0.8 });
-            const bodyGeometry = new THREE.CylinderGeometry(0.8, 1, 8, 16); const wingGeometry = new THREE.BoxGeometry(8, 0.3, 2); const tailWingGeometry = new THREE.BoxGeometry(3, 0.2, 1); const rudderGeometry = new THREE.BoxGeometry(0.2, 2, 1);
-            const body = new THREE.Mesh(bodyGeometry, planeMaterial); body.rotation.x = Math.PI / 2; airplane.add(body);
-            const leftWing = new THREE.Mesh(wingGeometry, planeMaterial); leftWing.position.set(-4.5, 0, 0); airplane.add(leftWing);
-            const rightWing = new THREE.Mesh(wingGeometry, planeMaterial); rightWing.position.set(4.5, 0, 0); airplane.add(rightWing);
-            const tailWing = new THREE.Mesh(tailWingGeometry, planeMaterial); tailWing.position.set(0, 0, 3.5); airplane.add(tailWing);
-            const rudder = new THREE.Mesh(rudderGeometry, planeMaterial); rudder.position.set(0, 1, 3.5); airplane.add(rudder);
-            airplane.position.set(0, 50, 0);
-            airplane.rotation.order = 'YXZ';
-            scene.add(airplane);
+                 forwardVector.set(0, 0, -1).applyQuaternion(this.airplane.quaternion);
+                 this.airplane.position.addScaledVector(forwardVector, this.speed * deltaTime);
 
-            // Event Listeners
-            window.addEventListener('resize', onWindowResize, false);
-            document.addEventListener('keydown', onKeyDown, false);
-            document.addEventListener('keyup', onKeyUp, false);
+                 if (this.airplane.position.y < 1) { this.airplane.position.y = 1; this.airplane.rotation.x *= 0.95; this.airplane.rotation.z *= 0.95; }
 
-            animate(); // Start animation loop
-        }
+                 // --- Update Damage Effects ---
+                 const shouldBeLowHp = this.currentHp <= LOW_HP_THRESHOLD;
 
-        function setupPostProcessing() {
-            composer = new EffectComposer(renderer);
-            const renderPass = new RenderPass(scene, camera);
-            composer.addPass(renderPass);
-            const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.0, 0.4, 0.8);
-            composer.addPass(bloomPass);
-        }
+                 // Check if low HP state changed
+                 if (shouldBeLowHp !== this.lowHpStateActive) {
+                     console.log(`Low HP State Changed: ${shouldBeLowHp} (HP: ${this.currentHp})`);
+                     this.lowHpStateActive = shouldBeLowHp;
 
-        // --- Particle Generation Functions ---
+                     // Toggle fire visibility based on new state
+                     if (this.fireEffect) {
+                         this.fireEffect.visible = this.lowHpStateActive;
+                         console.log(`Fire effect visibility set to: ${this.fireEffect.visible}`);
+                     } else if (this.lowHpStateActive) {
+                         // Attempt to create fire effect if it wasn't ready initially and should be visible
+                         console.log("Attempting to create fire effect on low HP...");
+                         this.createFireEffect();
+                         if(this.fireEffect) this.fireEffect.visible = true; // Ensure visible if created now
+                     }
+                 }
 
-        function createPoints(positions, material) {
-            if (!positions || positions.length === 0) return null;
-            const geometry = new THREE.BufferGeometry();
-            geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-            geometry.computeBoundingSphere();
-            return new THREE.Points(geometry, material);
-        }
+                 // Animate fire particles if visible
+                 if (this.fireEffect && this.fireEffect.visible) {
+                     const positions = this.fireEffect.geometry.attributes.position;
+                     if (positions) {
+                         for (let i = 0; i < positions.count; i++) {
+                             positions.array[i * 3 + 1] += (Math.random() - 0.2) * 0.1; // Upward drift + jitter
+                         }
+                         positions.needsUpdate = true;
+                     }
+                 }
 
-        function generateInfiniteGroundPositions(planeSize, numGrass, numFlowers) {
-            const grassPositions = []; const flowerPositions = []; const halfSize = planeSize / 2;
-            for (let i = 0; i < numGrass; i++) { grassPositions.push( (Math.random() - 0.5) * planeSize, 0, (Math.random() - 0.5) * planeSize ); }
-            for (let i = 0; i < numFlowers; i++) { flowerPositions.push( (Math.random() - 0.5) * planeSize, 0.1, (Math.random() - 0.5) * planeSize ); }
-            return { grassPositions, flowerPositions };
-        }
+                 // Emit smoke if low HP state is active and enough time has passed
+                 if (this.lowHpStateActive && smokeTrailManager && clock && clock.getElapsedTime() > this.lastSmokeEmitTime + SMOKE_EMIT_INTERVAL) {
+                     // console.log("Emitting smoke..."); // Add log for debugging smoke
+                     const smokeEmitOffset = tempVector3.set(0, 0, 5).applyQuaternion(this.airplane.quaternion);
+                     const smokeEmitPos = this.airplane.position.clone().add(smokeEmitOffset);
+                     smokeTrailManager.emitParticles(smokeEmitPos, SMOKE_PARTICLES_PER_EMIT);
+                     this.lastSmokeEmitTime = clock.getElapsedTime();
+                 }
 
-        function createInfiniteGround() {
-            if (!baseGrassMaterial || !baseFlowerMaterial) return;
-            const { grassPositions, flowerPositions } = generateInfiniteGroundPositions( groundPlaneSize, groundGrassParticles, groundFlowerParticles );
-            const grassPlane = createPoints(grassPositions, baseGrassMaterial);
-            if (grassPlane) { grassPlane.position.set(0, 0, 0); scene.add(grassPlane); console.log(`Created infinite grass plane with ${groundGrassParticles} particles.`); }
-             if (flowerPositions.length > 0) {
-                 const flowerMat = baseFlowerMaterial.clone(); flowerMat.color.copy(getRandomItem(flowerColors));
-                 const flowerPlane = createPoints(flowerPositions, flowerMat);
-                 if (flowerPlane) { flowerPlane.position.set(0, 0, 0); scene.add(flowerPlane); console.log(`Added ${groundFlowerParticles} flowers.`); }
+                 this.updateHUD();
+             }
+
+             updateHUD() {
+                  if (speedInfoElement) speedInfoElement.textContent = (this.speed * SPEED_UNIT_FACTOR).toFixed(1);
+                  if (altInfoElement) altInfoElement.textContent = (this.airplane.position.y * ALT_UNIT_FACTOR).toFixed(0);
+                  if (hdgInfoElement && this.airplane) {
+                      forwardVector.set(0, 0, -1).applyQuaternion(this.airplane.quaternion);
+                      projectedVector.copy(forwardVector).setY(0).normalize();
+                      let heading = Math.atan2(projectedVector.x, projectedVector.z) * (180 / Math.PI);
+                      if (heading < 0) heading += 360;
+                      hdgInfoElement.textContent = heading.toFixed(0);
+                  }
+                  if (hpBarElement) {
+                      const hpPercent = (this.currentHp / this.maxHp) * 100;
+                      hpBarElement.style.width = `${hpPercent}%`;
+                      // Adjusted threshold for color change
+                      if (hpPercent <= (LOW_HP_THRESHOLD / this.maxHp * 100)) hpBarElement.style.backgroundColor = '#ff4500'; // OrangeRed
+                      else if (hpPercent <= 60) hpBarElement.style.backgroundColor = '#ffcc00'; // Yellowish
+                      else hpBarElement.style.backgroundColor = '#4CAF50'; // Green
+                  }
              }
         }
 
-        function generateRoadPositions(cellSize, cellX, cellZ) {
-            const positions = []; const roadWidth = cellSize * 0.2; const particleDensity = roadParticlesPerCell / (cellSize * roadWidth * 2);
-            const hasNSroad = (Math.abs(cellX) % roadFrequency === 0); const hasEWroad = (Math.abs(cellZ) % roadFrequency === 0);
-            if (hasNSroad) { const count = Math.ceil(cellSize * roadWidth * particleDensity); for (let i = 0; i < count; i++) { positions.push( (Math.random() - 0.5) * roadWidth, 0, (Math.random() - 0.5) * cellSize ); } }
-            if (hasEWroad) { const count = Math.ceil(cellSize * roadWidth * particleDensity); for (let i = 0; i < count; i++) { positions.push( (Math.random() - 0.5) * cellSize, 0, (Math.random() - 0.5) * roadWidth ); } }
-            if (hasNSroad && hasEWroad) { const count = Math.ceil(roadWidth * roadWidth * particleDensity * 2); for (let i = 0; i < count; i++) { positions.push( (Math.random() - 0.5) * roadWidth, 0, (Math.random() - 0.5) * roadWidth ); } }
-            return positions;
+        // ====================================================================
+        // Explosion Manager Class
+        // ====================================================================
+        class ExplosionManager {
+              constructor(sceneRef, material) { this.scene = sceneRef; this.baseMaterial = material; this.explosions = []; }
+              createExplosion(position) {
+                  if (!this.baseMaterial || !clock) { console.error("ExplosionManager cannot create: Missing material or clock."); return; }
+                  const geometry = new THREE.BufferGeometry();
+                  const positions = []; const colors = []; const velocities = [];
+                  for (let i = 0; i < EXPLOSION_PARTICLES; i++) {
+                      positions.push(0, 0, 0);
+                      const theta = Math.random() * Math.PI * 2; const phi = Math.acos((Math.random() * 2) - 1); const speed = Math.random() * EXPLOSION_SPEED;
+                      velocities.push( speed * Math.sin(phi) * Math.cos(theta), speed * Math.sin(phi) * Math.sin(theta), speed * Math.cos(phi) );
+                      colors.push(EXPLOSION_INITIAL_COLOR.r, EXPLOSION_INITIAL_COLOR.g, EXPLOSION_INITIAL_COLOR.b);
+                  }
+                  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+                  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+                  geometry.setAttribute('velocity', new THREE.Float32BufferAttribute(velocities, 3));
+                  const points = new THREE.Points(geometry, this.baseMaterial);
+                  points.position.copy(position); this.scene.add(points);
+                  this.explosions.push({ points: points, startTime: clock.getElapsedTime(), duration: EXPLOSION_DURATION });
+              }
+              update(deltaTime) {
+                  if (!clock) return; const now = clock.getElapsedTime();
+                  for (let i = this.explosions.length - 1; i >= 0; i--) {
+                      const explosion = this.explosions[i]; const elapsedTime = now - explosion.startTime;
+                      if (elapsedTime > explosion.duration) { this.scene.remove(explosion.points); explosion.points.geometry.dispose(); this.explosions.splice(i, 1); continue; }
+                      const positions = explosion.points.geometry.attributes.position; const colors = explosion.points.geometry.attributes.color; const velocities = explosion.points.geometry.attributes.velocity;
+                      const lifeRatio = elapsedTime / explosion.duration;
+                      for (let j = 0; j < positions.count; j++) {
+                          positions.array[j * 3] += velocities.array[j * 3] * deltaTime; positions.array[j * 3 + 1] += velocities.array[j * 3 + 1] * deltaTime; positions.array[j * 3 + 2] += velocities.array[j * 3 + 2] * deltaTime;
+                          const fadeFactor = 1.0 - Math.pow(lifeRatio, 2);
+                          colors.array[j * 3] = EXPLOSION_INITIAL_COLOR.r * fadeFactor; colors.array[j * 3 + 1] = EXPLOSION_INITIAL_COLOR.g * fadeFactor * 0.5; colors.array[j * 3 + 2] = EXPLOSION_INITIAL_COLOR.b * fadeFactor * 0.2;
+                      }
+                      positions.needsUpdate = true; colors.needsUpdate = true;
+                  }
+              }
+              disposeAll() { for (let i = this.explosions.length - 1; i >= 0; i--) { const explosion = this.explosions[i]; this.scene.remove(explosion.points); explosion.points.geometry.dispose(); } this.explosions = []; console.log("All active explosions disposed."); }
         }
 
-        // Modified Building generation for single yellow type
-        function generateBuildingPositions(cellSize, maxHeight) {
-            const positions = [];
-            const width = Math.random() * (cellSize * 0.5) + (cellSize * 0.15); const depth = Math.random() * (cellSize * 0.5) + (cellSize * 0.15); const height = Math.random() * (maxHeight - 30) + 30;
-            const halfW = width / 2; const halfD = depth / 2;
-             for (let i = 0; i < buildingTotalParticles; i++) {
-                 const face = Math.floor(Math.random() * 5); let x, y, z;
-                 if (face === 0) { x = halfW; y = Math.random() * height; z = (Math.random() - 0.5) * depth; } else if (face === 1) { x = -halfW; y = Math.random() * height; z = (Math.random() - 0.5) * depth; } else if (face === 2) { x = (Math.random() - 0.5) * width; y = height; z = (Math.random() - 0.5) * depth; } else if (face === 3) { x = (Math.random() - 0.5) * width; y = Math.random() * height; z = halfD; } else { x = (Math.random() - 0.5) * width; y = Math.random() * height; z = -halfD; }
-                 x += (Math.random() - 0.5) * 0.5; y += (Math.random() - 0.5) * 0.5; z += (Math.random() - 0.5) * 0.5; positions.push(x, y, z);
-            }
-            return { positions }; // Only one array needed
+        // ====================================================================
+        // Smoke Trail Manager Class
+        // ====================================================================
+        class SmokeTrailManager {
+               constructor(sceneRef, material) { this.scene = sceneRef; this.baseMaterial = material; this.particles = []; this.maxParticles = 1000; }
+               emitParticles(position, count) {
+                   if (!this.baseMaterial || !clock) { console.error("SmokeTrailManager cannot emit: Missing material or clock."); return; }
+                   while (this.particles.length >= this.maxParticles) { const oldest = this.particles.shift(); this.scene.remove(oldest.points); oldest.points.geometry.dispose(); }
+                   const geometry = new THREE.BufferGeometry(); const positions = []; const velocities = [];
+                   for (let i = 0; i < count; i++) {
+                       positions.push(0, 0, 0);
+                       velocities.push( (Math.random() - 0.5) * 5, (Math.random() - 0.5) * 3 + 1, (Math.random() - 0.5) * 5 );
+                   }
+                   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+                   geometry.setAttribute('velocity', new THREE.Float32BufferAttribute(velocities, 3));
+                   const smokeMaterial = this.baseMaterial.clone(); // Clone to manage opacity per instance
+                   smokeMaterial.opacity = 0.6; // Start opacity
+                   const points = new THREE.Points(geometry, smokeMaterial);
+                   points.position.copy(position); this.scene.add(points);
+                   this.particles.push({ points: points, startTime: clock.getElapsedTime() });
+               }
+               update(deltaTime) {
+                   if (!clock) return; const now = clock.getElapsedTime();
+                   for (let i = this.particles.length - 1; i >= 0; i--) {
+                       const particleData = this.particles[i]; const elapsedTime = now - particleData.startTime;
+                       if (elapsedTime > SMOKE_PARTICLE_LIFETIME) { this.scene.remove(particleData.points); particleData.points.geometry.dispose(); this.particles.splice(i, 1); continue; }
+                       const positions = particleData.points.geometry.attributes.position; const velocities = particleData.points.geometry.attributes.velocity;
+                       const lifeRatio = elapsedTime / SMOKE_PARTICLE_LIFETIME;
+                       for (let j = 0; j < positions.count; j++) {
+                           positions.array[j * 3] += velocities.array[j * 3] * deltaTime; positions.array[j * 3 + 1] += velocities.array[j * 3 + 1] * deltaTime; positions.array[j * 3 + 2] += velocities.array[j * 3 + 2] * deltaTime;
+                           velocities.array[j * 3 + 1] -= 1.5 * deltaTime;
+                       }
+                       positions.needsUpdate = true;
+                       // Fade out the cloned material instance
+                       if (particleData.points.material) {
+                            particleData.points.material.opacity = 0.6 * (1.0 - lifeRatio);
+                       }
+                   }
+               }
+               clearAllParticles() { for (let i = this.particles.length - 1; i >= 0; i--) { const particleData = this.particles[i]; this.scene.remove(particleData.points); particleData.points.geometry.dispose(); if(particleData.points.material.isMaterial) particleData.points.material.dispose(); } this.particles = []; } // Dispose cloned materials
         }
 
-        // House generation
-        function generateHousePositions(cellSize) {
-            const wallPositions = []; const windowPositions = []; const roofPositions = [];
-            const width = Math.random() * (cellSize * 0.25) + (cellSize * 0.1); const depth = Math.random() * (cellSize * 0.25) + (cellSize * 0.1); const wallHeight = Math.random() * 8 + 4; const roofHeight = wallHeight + Math.random() * (width * 0.5) + 2;
-            const halfW = width / 2; const halfD = depth / 2;
-             for (let i = 0; i < houseWallParticles; i++) { const face = Math.floor(Math.random() * 4); let x, y, z; if (face === 0) { x = halfW; y = Math.random() * wallHeight; z = (Math.random() - 0.5) * depth; } else if (face === 1) { x = -halfW; y = Math.random() * wallHeight; z = (Math.random() - 0.5) * depth; } else if (face === 2) { x = (Math.random() - 0.5) * width; y = Math.random() * wallHeight; z = halfD; } else { x = (Math.random() - 0.5) * width; y = Math.random() * wallHeight; z = -halfD; } wallPositions.push(x, y, z); }
-             for (let i = 0; i < houseWindowParticles; i++) { const face = Math.floor(Math.random() * 4); let x, y, z; if (face === 0) { x = halfW; y = Math.random() * wallHeight; z = (Math.random() - 0.5) * depth; } else if (face === 1) { x = -halfW; y = Math.random() * wallHeight; z = (Math.random() - 0.5) * depth; } else if (face === 2) { x = (Math.random() - 0.5) * width; y = Math.random() * wallHeight; z = halfD; } else { x = (Math.random() - 0.5) * width; y = Math.random() * wallHeight; z = -halfD; } windowPositions.push(x * 0.98, y, z * 0.98); }
-             for (let i = 0; i < houseRoofParticles; i++) { const pz = (Math.random() - 0.5) * depth; const px_norm = Math.random(); const px = (px_norm - 0.5) * width; const py = wallHeight + (roofHeight - wallHeight) * (1 - Math.abs(px) / halfW); roofPositions.push(px + (Math.random()-0.5)*0.2, py + (Math.random()-0.5)*0.2, pz + (Math.random()-0.5)*0.2); }
-            return { wallPositions, windowPositions, roofPositions };
+        // ====================================================================
+        // Initialization Function
+        // ====================================================================
+        function init() {
+             console.log("Initializing simulation...");
+             try {
+                 setupLoadingManager();
+                 setupScene(); // Creates scene, clock
+                 setupRenderer();
+                 setupCamera();
+                 setupLighting();
+                 setupAirplane(); // Creates airplane object
+                 loadAssets(); // Starts texture loading via manager
+                 setupEventListeners();
+                 animate(); // Starts loop, but waits for isInitializationComplete
+             } catch (error) {
+                 console.error("Initialization failed:", error);
+                 displayError("Error during initialization. Please refresh.");
+             }
         }
 
-        // Tree generation
-        function generateTreePositions(maxHeight) {
-            const canopyPositions = []; const trunkPositions = []; const trunkHeight = Math.random() * 4 + 2; const canopyRadius = Math.random() * 3 + 1.5; const canopyHeight = Math.random() * 5 + canopyRadius;
-            for (let i = 0; i < treeTrunkParticles; i++) { trunkPositions.push(0, (i / treeTrunkParticles) * trunkHeight, 0); }
-            for (let i = 0; i < treeCanopyParticles; i++) { const u=Math.random(), v=Math.random(), theta=2*Math.PI*u, phi=Math.acos(2*v-1), r=canopyRadius*Math.cbrt(Math.random()); canopyPositions.push( r * Math.sin(phi) * Math.cos(theta), trunkHeight + r * Math.cos(phi) * (canopyHeight/canopyRadius), r * Math.sin(phi) * Math.sin(theta) ); }
-            return { canopyPositions, trunkPositions };
-        }
+        // ====================================================================
+        // Setup Functions
+        // ====================================================================
+        function setupLoadingManager() {
+            loadingManager = new THREE.LoadingManager(
+                // --- onLoad ---
+                () => {
+                    console.log('[onLoad] Assets loaded. Proceeding with final setup...');
+                    if(progressBar) progressBar.style.width = '100%';
+                    if(loadingMessage) loadingMessage.textContent = 'Creating world...';
+                    if(progressBar) progressBar.classList.add('loading-pulse');
 
-        // Car generation
-        function generateCarPositions() {
-             const bodyPositions = []; const lightPositions = []; const length = 4; const width = 1.8; const height = 1.5; const halfL = length/2; const halfW = width/2;
-             for(let i=0; i<carBodyParticles; i++){ const face = Math.floor(Math.random() * 6); let x,y,z; if (face === 0) { x = halfW; y = Math.random() * height; z = (Math.random() - 0.5) * length; } else if (face === 1) { x = -halfW; y = Math.random() * height; z = (Math.random() - 0.5) * length; } else if (face === 2) { x = (Math.random() - 0.5) * width; y = height; z = (Math.random() - 0.5) * length; } else if (face === 3) { x = (Math.random() - 0.5) * width; y = 0; z = (Math.random() - 0.5) * length; } else if (face === 4) { x = (Math.random() - 0.5) * width; y = Math.random() * height; z = halfL; } else { x = (Math.random() - 0.5) * width; y = Math.random() * height; z = -halfL; } bodyPositions.push(x,y,z); }
-             const lightY = height * 0.4; for(let i=0; i<carLightParticles/2; i++) { lightPositions.push((Math.random()>0.5?1:-1)*halfW*0.8, lightY, halfL); lightPositions.push((Math.random()>0.5?1:-1)*halfW*0.8, lightY, -halfL); }
-             return { bodyPositions, lightPositions };
-        }
+                    // --- Post-Load Setup Steps ---
+                    let setupStep = ""; // Variable to track current step for error reporting
+                    try {
+                        // Step 1: Create Base Materials
+                        setupStep = "Creating Base Materials";
+                        console.log(`[onLoad] Step: ${setupStep}...`);
+                        if (!particleTexture) throw new Error("Particle texture is not available after loading.");
+                        createBaseMaterials();
+                        console.log(`[onLoad] Step: ${setupStep} - Success.`);
 
-        // People generation
-         function generatePeoplePositions() {
-             const positions = []; const personHeight = 1.7;
-             for(let i=0; i<peopleParticles; i++){ positions.push(0, (i / peopleParticles) * personHeight, 0); }
-            return positions;
-         }
+                        // Step 2: Initialize Managers
+                        setupStep = "Initializing Managers";
+                        console.log(`[onLoad] Step: ${setupStep}...`);
+                        if (!baseExplosionMaterial || !baseSmokeMaterial) throw new Error("Effect materials not ready for managers.");
+                        explosionManager = new ExplosionManager(scene, baseExplosionMaterial);
+                        smokeTrailManager = new SmokeTrailManager(scene, baseSmokeMaterial);
+                        console.log(`[onLoad] Step: ${setupStep} - Success.`);
 
-        // Helper to get random item from array
-        function getRandomItem(arr) {
-            if (!arr || arr.length === 0) return null;
-            return arr[Math.floor(Math.random() * arr.length)];
-        }
+                        // Step 3: Initialize Airplane Controller
+                        setupStep = "Initializing Airplane Controller";
+                        console.log(`[onLoad] Step: ${setupStep}...`);
+                        if (!airplane) throw new Error("Airplane object not created before controller initialization.");
+                        airplaneController = new AirplaneController(airplane);
+                        airplaneController.createFireEffect(); // Attempt fire effect creation now
+                        console.log(`[onLoad] Step: ${setupStep} - Success.`);
 
+                        // Step 4: Create Infinite Ground
+                        setupStep = "Creating Infinite Ground";
+                        console.log(`[onLoad] Step: ${setupStep}...`);
+                        createInfiniteGround();
+                        console.log(`[onLoad] Step: ${setupStep} - Success.`);
 
-        // --- Grid Logic for Detail Objects (No Grass Here Anymore) ---
-        function updateInfiniteGrid() {
-             // Check required base materials
-             if (!airplane || !baseRoadMaterial || !baseTreeCanopyMaterial || !baseTreeTrunkMaterial ||
-                 !baseBuildingMaterial || !baseHouseWallMaterial || !baseHouseWindowMaterial || !baseHouseRoofMaterial ||
-                 !baseCarBodyMaterial || !baseCarLightMaterial || !basePeopleMaterial) return;
+                        // Step 5: Setup Post-Processing
+                        setupStep = "Setting up Post-Processing";
+                        console.log(`[onLoad] Step: ${setupStep}...`);
+                        setupPostProcessing();
+                        console.log(`[onLoad] Step: ${setupStep} - Success.`);
 
-            const newPlayerCellX = Math.round(airplane.position.x / cellSize);
-            const newPlayerCellZ = Math.round(airplane.position.z / cellSize);
-
-            if (newPlayerCellX === currentPlayerCellX && newPlayerCellZ === currentPlayerCellZ) return;
-
-            currentPlayerCellX = newPlayerCellX;
-            currentPlayerCellZ = newPlayerCellZ;
-
-            const cellsToRemove = new Set(activeCells.keys());
-            const cellsToAdd = new Set();
-
-            // Determine required cells
-            for (let x = currentPlayerCellX - gridRadius; x <= currentPlayerCellX + gridRadius; x++) {
-                for (let z = currentPlayerCellZ - gridRadius; z <= currentPlayerCellZ + gridRadius; z++) {
-                    const key = `${x},${z}`;
-                    if (activeCells.has(key)) { cellsToRemove.delete(key); } else { cellsToAdd.add(key); }
-                }
-            }
-
-            // --- Remove Old Cells ---
-            cellsToRemove.forEach(key => {
-                const cellData = activeCells.get(key);
-                if (cellData) {
-                    // Helper to remove array of objects & dispose geometry/cloned materials
-                    const removeArray = (arr) => {
-                        if (!arr) return;
-                        arr.forEach(obj => {
-                            if(obj) {
-                                scene.remove(obj);
-                                if(obj.geometry) obj.geometry.dispose();
-                                const baseMaterials = [ baseRoadMaterial, baseTreeCanopyMaterial, baseTreeTrunkMaterial, baseBuildingMaterial, baseHouseWallMaterial, baseHouseWindowMaterial, baseHouseRoofMaterial, baseCarBodyMaterial, baseCarLightMaterial, basePeopleMaterial];
-                                let isBase = false;
-                                for (const baseMat of baseMaterials) { if (baseMat && obj.material.uuid === baseMat.uuid) { isBase = true; break; } }
-                                if (!isBase && obj.material && typeof obj.material.dispose === 'function') { obj.material.dispose(); }
+                        // Step 6: Schedule Initial Grid Generation
+                        setupStep = "Scheduling Initial Grid Generation";
+                        console.log(`[onLoad] Step: ${setupStep}...`);
+                        setTimeout(() => {
+                            console.log("[setTimeout] Starting initial grid generation...");
+                            try {
+                                updateInfiniteGrid();
+                                console.log('[setTimeout] Initial grid generated.');
+                                if (loadingOverlay) loadingOverlay.classList.add('hidden');
+                                if (loadingStatusElement) loadingStatusElement.textContent = 'Ready';
+                                isInitializationComplete = true; // <<<<<<< FINAL SUCCESS POINT >>>>>>>
+                                console.log(">>>>> Initialization Complete. Starting simulation updates. <<<<<");
+                            } catch (gridError) {
+                                 console.error("[setTimeout] Error during initial grid generation:", gridError);
+                                 displayError("Error generating scenery. Please refresh.");
+                                 isInitializationComplete = false;
                             }
-                        });
-                    };
-                    // Remove all detail types
-                    removeArray(cellData.roads); removeArray(cellData.buildings); removeArray(cellData.houses);
-                    removeArray(cellData.trees); removeArray(cellData.cars); removeArray(cellData.people);
+                        }, 50);
+                        console.log(`[onLoad] Step: ${setupStep} - Success (Scheduled).`);
+
+                    } catch (setupError) {
+                        console.error(`Error during post-load setup (Step: ${setupStep}):`, setupError);
+                        displayError(`Error setting up simulation (${setupStep}). Please refresh.`);
+                        isInitializationComplete = false; // Ensure flag remains false on error
+                    }
+                },
+                // --- onProgress ---
+                (url, itemsLoaded, itemsTotal) => {
+                    const progress = itemsTotal > 0 ? Math.round((itemsLoaded / itemsTotal) * 100) : 0;
+                    if (progressBar) progressBar.style.width = progress + '%';
+                    // Keep message simple during loading
+                     if (loadingMessage && progress < 100) loadingMessage.textContent = `Loading Assets...`;
+                },
+                // --- onError ---
+                (url) => {
+                    console.error('Error loading asset via LoadingManager:', url);
+                     displayError(`Error loading asset: ${url}. Please refresh.`);
                 }
-                activeCells.delete(key);
-            });
+            );
+        }
 
-            // --- Add New Cells ---
-            cellsToAdd.forEach(key => {
-                const coords = key.split(',').map(Number);
-                const cellX = coords[0]; const cellZ = coords[1];
-                const cellWorldX = cellX * cellSize; const cellWorldZ = cellZ * cellSize;
+        function setupScene() { scene = new THREE.Scene(); scene.fog = new THREE.FogExp2(0x000000, FOG_DENSITY); scene.background = new THREE.Color(0x000000); clock = new THREE.Clock(); console.log("Scene and Clock created."); }
+        function setupRenderer() { renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" }); renderer.setSize(window.innerWidth, window.innerHeight); renderer.setPixelRatio(window.devicePixelRatio); renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0; renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.shadowMap.enabled = false; document.body.appendChild(renderer.domElement); console.log("Renderer created."); }
+        function setupCamera() { camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.5, GROUND_PLANE_SIZE * 0.8); camera.position.set(0, 70, 130); camera.lookAt(0, 0, 0); console.log("Camera created."); }
+        function setupLighting() { const ambientLight = new THREE.AmbientLight(0x606060); scene.add(ambientLight); const dirLight = new THREE.DirectionalLight(0xffffff, 0.7); dirLight.position.set(80, 150, 70); scene.add(dirLight); console.log("Lighting created."); }
+        function setupAirplane() { airplane = new THREE.Group(); const planeMaterial = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.7, roughness: 0.5, emissive: new THREE.Color(0x00ffff), emissiveIntensity: 0.6 }); const bodyGeometry = new THREE.CylinderGeometry(0.8, 1, 8, 16); const wingGeometry = new THREE.BoxGeometry(8, 0.3, 2); const tailWingGeometry = new THREE.BoxGeometry(3, 0.2, 1); const rudderGeometry = new THREE.BoxGeometry(0.2, 2, 1); const body = new THREE.Mesh(bodyGeometry, planeMaterial); body.rotation.x = Math.PI / 2; airplane.add(body); const leftWing = new THREE.Mesh(wingGeometry, planeMaterial); leftWing.position.set(-4.5, 0, 0); airplane.add(leftWing); const rightWing = new THREE.Mesh(wingGeometry, planeMaterial); rightWing.position.set(4.5, 0, 0); airplane.add(rightWing); const tailWing = new THREE.Mesh(tailWingGeometry, planeMaterial); tailWing.position.set(0, 0, 3.5); airplane.add(tailWing); const rudder = new THREE.Mesh(rudderGeometry, planeMaterial); rudder.position.set(0, 1, 3.5); airplane.add(rudder); airplane.position.set(0, 50, 0); airplane.rotation.order = 'YXZ'; scene.add(airplane); console.log("Airplane object created."); }
 
-                const zoneVal = zoneNoise(cellX * 0.05, cellZ * 0.05);
-                const densVal = (densityNoise(cellX * 0.1, cellZ * 0.1) + 1) / 2;
-
-                let zoneType = 'residential';
-                if (zoneVal < -0.3) zoneType = 'park';
-                else if (zoneVal > 0.4) zoneType = 'downtown';
-
-                // Initialize cell data - NO GRASS
-                let cellData = { roads: [], buildings: [], houses: [], trees: [], cars: [], people: [] };
-
-                // 1. Roads
-                const isRoadCell = (Math.abs(cellX) % roadFrequency === 0) || (Math.abs(cellZ) % roadFrequency === 0);
-                if (isRoadCell && zoneType !== 'park') {
-                    const roadPos = generateRoadPositions(cellSize, cellX, cellZ); const roadSegment = createPoints(roadPos, baseRoadMaterial);
-                    if (roadSegment) { roadSegment.position.set(cellWorldX, 0.1, cellWorldZ); scene.add(roadSegment); cellData.roads.push(roadSegment); }
+        function loadAssets() {
+            const textureLoader = new THREE.TextureLoader(loadingManager);
+            console.log("Loading particle texture via LoadingManager...");
+            textureLoader.load(
+                'https://threejs.org/examples/textures/sprites/disc.png',
+                (texture) => {
+                    console.log("Particle texture loaded successfully (specific callback).");
+                    particleTexture = texture; // Assign to global variable
+                },
+                undefined, // onProgress - handled by manager
+                (error) => {
+                    console.error("FATAL: Error loading particle texture (specific callback):", error);
+                    displayError("Failed to load core texture. Cannot continue. Please refresh.");
                 }
+            );
+        }
 
-                 // 2. Buildings (Yellow) / Houses (Brown/etc.)
+        function createBaseMaterials() {
+             console.log("Creating base materials..."); if (!particleTexture) throw new Error("Texture not available for materials.");
+             const sharedPropsWithMap = { ...SHARED_MAT_PROPS, map: particleTexture };
+             baseGrassMaterial = new THREE.PointsMaterial({ ...sharedPropsWithMap, color: 0x4CAF50, ...NORMAL_BLEND_PROPS, size: 1.2 });
+             baseFlowerMaterial = new THREE.PointsMaterial({ ...sharedPropsWithMap, size: 0.8, ...NORMAL_BLEND_PROPS, vertexColors: true });
+             baseTreeCanopyMaterial = new THREE.PointsMaterial({ ...sharedPropsWithMap, size: 1.5, ...NORMAL_BLEND_PROPS, vertexColors: true });
+             baseTreeTrunkMaterial = new THREE.PointsMaterial({ ...sharedPropsWithMap, color: 0x8B4513, size: 0.6, ...NORMAL_BLEND_PROPS });
+             baseRoadMaterial = new THREE.PointsMaterial({ ...sharedPropsWithMap, color: 0x333333, size: 0.8, ...NORMAL_BLEND_PROPS });
+             baseBuildingMaterial = new THREE.PointsMaterial({ ...sharedPropsWithMap, color: 0xFFFF00, size: 1.5, ...ADDITIVE_BLEND_PROPS });
+             baseHouseWallMaterial = new THREE.PointsMaterial({ ...sharedPropsWithMap, size: 1.0, ...NORMAL_BLEND_PROPS, vertexColors: true });
+             baseHouseWindowMaterial = new THREE.PointsMaterial({ ...sharedPropsWithMap, color: 0xFFFFE0, size: 1.2, ...ADDITIVE_BLEND_PROPS });
+             baseHouseRoofMaterial = new THREE.PointsMaterial({ ...sharedPropsWithMap, size: 0.9, ...NORMAL_BLEND_PROPS, vertexColors: true });
+             baseCarBodyMaterial = new THREE.PointsMaterial({ ...sharedPropsWithMap, size: 0.7, ...NORMAL_BLEND_PROPS, vertexColors: true });
+             baseCarLightMaterial = new THREE.PointsMaterial({ ...sharedPropsWithMap, color: 0xFFFFFF, size: 1.0, ...ADDITIVE_BLEND_PROPS });
+             basePeopleMaterial = new THREE.PointsMaterial({ ...sharedPropsWithMap, size: 0.9, ...NORMAL_BLEND_PROPS, vertexColors: true });
+             baseExplosionMaterial = new THREE.PointsMaterial({ map: particleTexture, size: 3.0, ...ADDITIVE_BLEND_PROPS, vertexColors: true });
+             baseFireMaterial = new THREE.PointsMaterial({ map: particleTexture, size: 1.8, ...ADDITIVE_BLEND_PROPS, vertexColors: true, sizeAttenuation: true });
+             baseSmokeMaterial = new THREE.PointsMaterial({ map: particleTexture, size: 3.0, color: SMOKE_COLOR, blending: THREE.NormalBlending, opacity: 0.6, transparent: true, depthWrite: false, sizeAttenuation: true });
+             console.log("Base materials created.");
+        }
+        function setupPostProcessing() { console.log("Setting up post-processing..."); composer = new EffectComposer(renderer); const renderPass = new RenderPass(scene, camera); composer.addPass(renderPass); const bloomPass = new UnrealBloomPass( new THREE.Vector2(window.innerWidth, window.innerHeight), 1.1, 0.5, 0.7 ); composer.addPass(bloomPass); console.log("Post-processing setup complete."); }
+        function setupEventListeners() { window.addEventListener('resize', onWindowResize, false); document.addEventListener('keydown', onKeyDown, false); document.addEventListener('keyup', onKeyUp, false); console.log("Event listeners added."); }
+
+        // ====================================================================
+        // Particle Generation Functions
+        // ====================================================================
+        function createPoints(positions, material, colors = null) { if (!positions || positions.length === 0) return null; try { const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3)); if (colors && colors.length === positions.length && material.vertexColors) { geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3)); } else if (colors && colors.length !== positions.length) { console.warn("Color array length mismatch. Colors ignored."); } else if (colors && !material.vertexColors) { console.warn("Color array provided, but material.vertexColors is false. Colors ignored."); } geometry.computeBoundingSphere(); geometry.computeBoundingBox(); return new THREE.Points(geometry, material); } catch (error) { console.error("Error creating Points object:", error); return null; } } // Added computeBoundingBox()
+        function generateInfiniteGroundPositions() { const grassPositions = []; const flowerPositions = []; const flowerColorsArray = []; const halfSize = GROUND_PLANE_SIZE / 2; for (let i = 0; i < GROUND_GRASS_PARTICLES; i++) { grassPositions.push( (Math.random() - 0.5) * GROUND_PLANE_SIZE, 0, (Math.random() - 0.5) * GROUND_PLANE_SIZE ); } for (let i = 0; i < GROUND_FLOWER_PARTICLES; i++) { flowerPositions.push( (Math.random() - 0.5) * GROUND_PLANE_SIZE, 0.1, (Math.random() - 0.5) * GROUND_PLANE_SIZE ); const color = getRandomItem(FLOWER_COLORS); flowerColorsArray.push(color.r, color.g, color.b); } return { grassPositions, flowerPositions, flowerColorsArray }; }
+        function createInfiniteGround() { if (!baseGrassMaterial || !baseFlowerMaterial) { console.error("Base ground materials not ready for createInfiniteGround."); return; } const { grassPositions, flowerPositions, flowerColorsArray } = generateInfiniteGroundPositions(); const grassPlane = createPoints(grassPositions, baseGrassMaterial); if (grassPlane) { grassPlane.position.set(0, -0.1, 0); scene.add(grassPlane); } if (flowerPositions.length > 0) { const flowerPlane = createPoints(flowerPositions, baseFlowerMaterial, flowerColorsArray); if (flowerPlane) { flowerPlane.position.set(0, 0, 0); scene.add(flowerPlane); } } console.log("Infinite ground created."); }
+        function generateRoadPositions(cellX, cellZ) { const positions = []; const roadWidth = CELL_SIZE * 0.2; const particleDensity = ROAD_PARTICLES_PER_CELL / (CELL_SIZE * roadWidth * 2); const hasNSroad = (Math.abs(cellX) % ROAD_FREQUENCY === 0); const hasEWroad = (Math.abs(cellZ) % ROAD_FREQUENCY === 0); if (hasNSroad) { const count = Math.ceil(CELL_SIZE * roadWidth * particleDensity); for (let i = 0; i < count; i++) { positions.push( (Math.random() - 0.5) * roadWidth, 0, (Math.random() - 0.5) * CELL_SIZE ); } } if (hasEWroad) { const count = Math.ceil(CELL_SIZE * roadWidth * particleDensity); for (let i = 0; i < count; i++) { positions.push( (Math.random() - 0.5) * CELL_SIZE, 0, (Math.random() - 0.5) * roadWidth ); } } if (hasNSroad && hasEWroad) { const count = Math.ceil(roadWidth * roadWidth * particleDensity * 1.5); for (let i = 0; i < count; i++) { positions.push( (Math.random() - 0.5) * roadWidth, 0, (Math.random() - 0.5) * roadWidth ); } } return positions; }
+        function generateBuildingPositions(maxHeight) { const positions = []; const width = Math.random() * (CELL_SIZE * 0.5) + (CELL_SIZE * 0.15); const depth = Math.random() * (CELL_SIZE * 0.5) + (CELL_SIZE * 0.15); const height = Math.random() * (maxHeight - 30) + 30; const halfW = width / 2; const halfD = depth / 2; for (let i = 0; i < BUILDING_PARTICLES; i++) { const face = Math.floor(Math.random() * 5); let x, y, z; if (face === 0) { x = halfW; y = Math.random() * height; z = (Math.random() - 0.5) * depth; } else if (face === 1) { x = -halfW; y = Math.random() * height; z = (Math.random() - 0.5) * depth; } else if (face === 2) { x = (Math.random() - 0.5) * width; y = height; z = (Math.random() - 0.5) * depth; } else if (face === 3) { x = (Math.random() - 0.5) * width; y = Math.random() * height; z = halfD; } else { x = (Math.random() - 0.5) * width; y = Math.random() * height; z = -halfD; } x += (Math.random() - 0.5) * 0.8; y += (Math.random() - 0.5) * 0.8; z += (Math.random() - 0.5) * 0.8; positions.push(x, y, z); } return { positions }; }
+        function generateHousePositions() { const wallPositions = []; const wallColorsArray = []; const windowPositions = []; const roofPositions = []; const roofColorsArray = []; const width = Math.random() * (CELL_SIZE * 0.25) + (CELL_SIZE * 0.1); const depth = Math.random() * (CELL_SIZE * 0.25) + (CELL_SIZE * 0.1); const wallHeight = Math.random() * 8 + 4; const roofPitch = Math.random() * (width * 0.4) + 2; const roofHeight = wallHeight + roofPitch; const halfW = width / 2; const halfD = depth / 2; const wallColor = getRandomItem(HOUSE_WALL_COLORS); const roofColor = getRandomItem(HOUSE_ROOF_COLORS); for (let i = 0; i < HOUSE_WALL_PARTICLES; i++) { const face = Math.floor(Math.random() * 4); let x, y, z; if (face === 0) { x = halfW; y = Math.random() * wallHeight; z = (Math.random() - 0.5) * depth; } else if (face === 1) { x = -halfW; y = Math.random() * wallHeight; z = (Math.random() - 0.5) * depth; } else if (face === 2) { x = (Math.random() - 0.5) * width; y = Math.random() * wallHeight; z = halfD; } else { x = (Math.random() - 0.5) * width; y = Math.random() * wallHeight; z = -halfD; } wallPositions.push(x, y, z); wallColorsArray.push(wallColor.r, wallColor.g, wallColor.b); } for (let i = 0; i < HOUSE_WINDOW_PARTICLES; i++) { const face = Math.floor(Math.random() * 4); let x, y, z; if (face === 0) { x = halfW * 0.99; y = Math.random() * wallHeight * 0.8 + wallHeight * 0.1; z = (Math.random() - 0.5) * depth * 0.8; } else if (face === 1) { x = -halfW * 0.99; y = Math.random() * wallHeight * 0.8 + wallHeight * 0.1; z = (Math.random() - 0.5) * depth * 0.8; } else if (face === 2) { x = (Math.random() - 0.5) * width * 0.8; y = Math.random() * wallHeight * 0.8 + wallHeight * 0.1; z = halfD * 0.99; } else { x = (Math.random() - 0.5) * width * 0.8; y = Math.random() * wallHeight * 0.8 + wallHeight * 0.1; z = -halfD * 0.99; } windowPositions.push(x, y, z); } for (let i = 0; i < HOUSE_ROOF_PARTICLES; i++) { const pz = (Math.random() - 0.5) * depth; const px_norm = Math.random(); const px = (px_norm - 0.5) * width; const py = wallHeight + roofPitch * (1 - Math.abs(px) / halfW); roofPositions.push(px + (Math.random()-0.5)*0.3, py + (Math.random()-0.5)*0.3, pz + (Math.random()-0.5)*0.3); roofColorsArray.push(roofColor.r, roofColor.g, roofColor.b); } return { wallPositions, wallColorsArray, windowPositions, roofPositions, roofColorsArray }; }
+        function generateTreePositions() { const canopyPositions = []; const canopyColorsArray = []; const trunkPositions = []; const trunkHeight = Math.random() * 4 + 2; const canopyRadius = Math.random() * 3 + 1.5; const canopyHeightRatio = Math.random() * 1.5 + 0.8; const canopyColor = getRandomItem(TREE_CANOPY_COLORS); for (let i = 0; i < TREE_TRUNK_PARTICLES; i++) { trunkPositions.push(0, (i / TREE_TRUNK_PARTICLES) * trunkHeight, 0); } for (let i = 0; i < TREE_CANOPY_PARTICLES; i++) { const u = Math.random(); const v = Math.random(); const theta = 2 * Math.PI * u; const phi = Math.acos(2 * v - 1); const r = canopyRadius * Math.cbrt(Math.random()); canopyPositions.push( r * Math.sin(phi) * Math.cos(theta), trunkHeight + r * Math.cos(phi) * canopyHeightRatio, r * Math.sin(phi) * Math.sin(theta) ); canopyColorsArray.push(canopyColor.r, canopyColor.g, canopyColor.b); } return { canopyPositions, canopyColorsArray, trunkPositions }; }
+        function generateCarPositions() { const bodyPositions = []; const bodyColorsArray = []; const lightPositions = []; const length = 4; const width = 1.8; const height = 1.5; const halfL = length / 2; const halfW = width / 2; const bodyColor = getRandomItem(CAR_BODY_COLORS); for(let i = 0; i < CAR_BODY_PARTICLES; i++){ const face = Math.floor(Math.random() * 6); let x, y, z; if (face === 0) { x = halfW; y = Math.random() * height; z = (Math.random() - 0.5) * length; } else if (face === 1) { x = -halfW; y = Math.random() * height; z = (Math.random() - 0.5) * length; } else if (face === 2) { x = (Math.random() - 0.5) * width; y = height; z = (Math.random() - 0.5) * length; } else if (face === 3) { x = (Math.random() - 0.5) * width; y = 0; z = (Math.random() - 0.5) * length; } else if (face === 4) { x = (Math.random() - 0.5) * width; y = Math.random() * height; z = halfL; } else { x = (Math.random() - 0.5) * width; y = Math.random() * height; z = -halfL; } bodyPositions.push(x, y, z); bodyColorsArray.push(bodyColor.r, bodyColor.g, bodyColor.b); } const lightY = height * 0.4; const lightZOffset = halfL * 0.95; const lightXOffset = halfW * 0.8; for(let i = 0; i < CAR_LIGHT_PARTICLES / 2; i++) { lightPositions.push( (Math.random() > 0.5 ? 1 : -1) * lightXOffset, lightY, lightZOffset); lightPositions.push( (Math.random() > 0.5 ? 1 : -1) * lightXOffset, lightY, -lightZOffset); } return { bodyPositions, bodyColorsArray, lightPositions }; }
+        function generatePeoplePositions() { const positions = []; const colorsArray = []; const personHeight = 1.7; const personWidth = 0.4; const personColor = getRandomItem(PEOPLE_COLORS); for(let i = 0; i < PEOPLE_PARTICLES; i++){ positions.push( (Math.random() - 0.5) * personWidth, (i / PEOPLE_PARTICLES) * personHeight, (Math.random() - 0.5) * personWidth * 0.5 ); colorsArray.push(personColor.r, personColor.g, personColor.b); } return { positions, colorsArray }; }
+        function getRandomItem(arr) { if (!arr || arr.length === 0) return null; return arr[Math.floor(Math.random() * arr.length)]; }
+
+        // ====================================================================
+        // Infinite Grid Update Logic
+        // ====================================================================
+        function updateInfiniteGrid() {
+             if (!isInitializationComplete || !airplane) return; // Use the final flag
+             const newPlayerCellX = Math.round(airplane.position.x / CELL_SIZE);
+             const newPlayerCellZ = Math.round(airplane.position.z / CELL_SIZE);
+             if (newPlayerCellX === currentPlayerCellX && newPlayerCellZ === currentPlayerCellZ) return;
+
+             currentPlayerCellX = newPlayerCellX; currentPlayerCellZ = newPlayerCellZ;
+             const requiredCells = new Set(); const cellsToRemove = new Set(activeCells.keys());
+             for (let x = currentPlayerCellX - GRID_RADIUS; x <= currentPlayerCellX + GRID_RADIUS; x++) {
+                 for (let z = currentPlayerCellZ - GRID_RADIUS; z <= currentPlayerCellZ + GRID_RADIUS; z++) {
+                     const key = `${x},${z}`; requiredCells.add(key); cellsToRemove.delete(key);
+                 }
+             }
+
+             // --- Remove Old Cells ---
+             cellsToRemove.forEach(key => {
+                 const cellObjects = activeCells.get(key);
+                 if (cellObjects) {
+                     cellObjects.forEach(objData => {
+                         if (objData && objData.points) {
+                             scene.remove(objData.points);
+                             if (objData.points.geometry) objData.points.geometry.dispose();
+                             // Dispose cloned materials if necessary (e.g., smoke)
+                             if (objData.points.material && objData.points.material !== baseSmokeMaterial /* Add other base materials */) {
+                                // Only dispose if it's a clone, not a base material
+                                // objData.points.material.dispose(); // Be careful not to dispose base materials
+                             }
+                         }
+                     });
+                 }
+                 activeCells.delete(key);
+             });
+
+             // --- Add New Cells ---
+             requiredCells.forEach(key => {
+                 if (activeCells.has(key)) return;
+                 const coords = key.split(',').map(Number);
+                 const cellX = coords[0]; const cellZ = coords[1];
+                 const cellWorldX = cellX * CELL_SIZE; const cellWorldZ = cellZ * CELL_SIZE;
+                 const zoneVal = zoneNoise(cellX * 0.05, cellZ * 0.05);
+                 const densVal = (densityNoise(cellX * 0.1, cellZ * 0.1) + 1) / 2;
+                 let zoneType = 'residential';
+                 if (zoneVal < -0.35) zoneType = 'park'; else if (zoneVal > 0.35) zoneType = 'downtown';
+                 const cellObjects = []; const isRoadCell = (Math.abs(cellX) % ROAD_FREQUENCY === 0) || (Math.abs(cellZ) % ROAD_FREQUENCY === 0);
                  let structurePlaced = false;
-                 if (!isRoadCell || zoneType === 'downtown') {
-                     let placeChance = 0;
-                     // Use INCREASED building density/chance
-                     if (zoneType === 'downtown') placeChance = 0.85 * densVal; // Higher chance downtown
-                     else if (zoneType === 'residential') placeChance = 0.4 * densVal; // Moderate house chance
 
-                     const buildOrHouse = Math.random();
+                 // --- Generate Cell Content (with individual try-catch) ---
+                 try { // Roads
+                     if (isRoadCell && zoneType !== 'park') {
+                         const roadPos = generateRoadPositions(cellX, cellZ);
+                         const roadSegment = createPoints(roadPos, baseRoadMaterial);
+                         if (roadSegment) { roadSegment.position.set(cellWorldX, 0.1, cellWorldZ); scene.add(roadSegment); roadSegment.userData.type = 'road'; cellObjects.push({ points: roadSegment, type: 'road' }); }
+                     }
+                 } catch (e) { console.error(`Error generating roads for cell ${key}:`, e); }
 
-                     if (buildOrHouse < placeChance) {
-                         structurePlaced = true;
-                         const offsetX = (Math.random() - 0.5) * cellSize * 0.6; const offsetZ = (Math.random() - 0.5) * cellSize * 0.6;
-                         const structureWorldX = cellWorldX + offsetX; const structureWorldZ = cellWorldZ + offsetZ;
+                 try { // Buildings / Houses
+                     if (!isRoadCell || zoneType === 'downtown') {
+                         let placeChance = 0;
+                         if (zoneType === 'downtown') placeChance = 0.95 * densVal; else if (zoneType === 'residential') placeChance = RESIDENTIAL_HOUSE_CHANCE * densVal;
+                         if (Math.random() < placeChance) {
+                             structurePlaced = true;
+                             const offsetX = (Math.random() - 0.5) * CELL_SIZE * 0.7; const offsetZ = (Math.random() - 0.5) * CELL_SIZE * 0.7;
+                             const structureWorldX = cellWorldX + offsetX; const structureWorldZ = cellWorldZ + offsetZ;
+                             const isBuilding = (zoneType === 'downtown' && Math.random() < DOWNTOWN_BUILDING_CHANCE) || (zoneType === 'residential' && Math.random() < RESIDENTIAL_BUILDING_CHANCE);
+                             if (isBuilding) {
+                                 const buildingHeight = 450 * densVal + 70; const buildingPos = generateBuildingPositions(buildingHeight);
+                                 const building = createPoints(buildingPos.positions, baseBuildingMaterial);
+                                 if (building) { building.position.set(structureWorldX, 0, structureWorldZ); scene.add(building); building.userData.type = 'building'; cellObjects.push({ points: building, type: 'building' }); }
+                             } else {
+                                 const houseData = generateHousePositions();
+                                 const houseWalls = createPoints(houseData.wallPositions, baseHouseWallMaterial, houseData.wallColorsArray);
+                                 const houseWindows = createPoints(houseData.windowPositions, baseHouseWindowMaterial);
+                                 const houseRoof = createPoints(houseData.roofPositions, baseHouseRoofMaterial, houseData.roofColorsArray);
+                                 if (houseWalls) { houseWalls.position.set(structureWorldX, 0, structureWorldZ); scene.add(houseWalls); houseWalls.userData.type = 'house'; cellObjects.push({ points: houseWalls, type: 'house' }); }
+                                 if (houseWindows) { houseWindows.position.set(structureWorldX, 0, structureWorldZ); scene.add(houseWindows); houseWindows.userData.type = 'house'; cellObjects.push({ points: houseWindows, type: 'house' }); }
+                                 if (houseRoof) { houseRoof.position.set(structureWorldX, 0, structureWorldZ); scene.add(houseRoof); houseRoof.userData.type = 'house'; cellObjects.push({ points: houseRoof, type: 'house' }); }
+                             }
+                         }
+                     }
+                 } catch(e) { console.error(`Error generating structures for cell ${key}:`, e); }
 
-                         // Place Yellow Building OR House
-                         if ((zoneType === 'downtown' && Math.random() < 0.9) || (zoneType === 'residential' && Math.random() < 0.2)) {
-                             const buildingPos = generateBuildingPositions(cellSize, 400 * densVal + 60);
-                             const building = createPoints(buildingPos.positions, baseBuildingMaterial); // Single yellow material
-                             if (building) { building.position.set(structureWorldX, 0, structureWorldZ); scene.add(building); cellData.buildings.push(building); }
-                         } else {
-                             const housePos = generateHousePositions(cellSize);
-                             const wallMat = baseHouseWallMaterial.clone(); wallMat.color.copy(getRandomItem(houseWallColors));
-                             const roofMat = baseHouseRoofMaterial.clone(); roofMat.color.copy(getRandomItem(houseRoofColors));
-                             const houseWalls = createPoints(housePos.wallPositions, wallMat);
-                             const houseWindows = createPoints(housePos.windowPositions, baseHouseWindowMaterial);
-                             const houseRoof = createPoints(housePos.roofPositions, roofMat);
-                             if (houseWalls) { houseWalls.position.set(structureWorldX, 0, structureWorldZ); scene.add(houseWalls); cellData.houses.push(houseWalls); }
-                             if (houseWindows) { houseWindows.position.set(structureWorldX, 0, structureWorldZ); scene.add(houseWindows); cellData.houses.push(houseWindows); }
-                             if (houseRoof) { houseRoof.position.set(structureWorldX, 0, structureWorldZ); scene.add(houseRoof); cellData.houses.push(houseRoof); }
+                 try { // Trees
+                     let treeChance = 0;
+                     if (zoneType === 'park') treeChance = 0.75 * densVal; else if (zoneType === 'residential') treeChance = 0.18 * densVal;
+                     if (Math.random() < treeChance && !structurePlaced) {
+                         const numTrees = Math.floor(Math.random() * 5 * densVal) + 1;
+                         for (let i = 0; i < numTrees; i++) {
+                             const treeData = generateTreePositions();
+                             const treeCanopy = createPoints(treeData.canopyPositions, baseTreeCanopyMaterial, treeData.canopyColorsArray);
+                             const treeTrunk = createPoints(treeData.trunkPositions, baseTreeTrunkMaterial);
+                             const treeX = cellWorldX + (Math.random() - 0.5) * CELL_SIZE * 0.9; const treeZ = cellWorldZ + (Math.random() - 0.5) * CELL_SIZE * 0.9;
+                             if(treeCanopy){ treeCanopy.position.set(treeX, 0, treeZ); scene.add(treeCanopy); treeCanopy.userData.type = 'tree'; cellObjects.push({ points: treeCanopy, type: 'tree' }); }
+                             if(treeTrunk){ treeTrunk.position.set(treeX, 0, treeZ); scene.add(treeTrunk); treeTrunk.userData.type = 'tree'; cellObjects.push({ points: treeTrunk, type: 'tree' }); }
+                         }
+                     }
+                 } catch(e) { console.error(`Error generating trees for cell ${key}:`, e); }
+
+                 try { // Cars
+                     if (isRoadCell && zoneType !== 'park') {
+                         const numCars = Math.floor(carsPerRoadCell * Math.random() * densVal * 1.5);
+                         for(let i = 0; i < numCars; i++) {
+                             const carData = generateCarPositions();
+                             const carBody = createPoints(carData.bodyPositions, baseCarBodyMaterial, carData.bodyColorsArray);
+                             const carLights = createPoints(carData.lightPositions, baseCarLightMaterial);
+                             let carX, carZ; const isNS = (Math.abs(cellX) % ROAD_FREQUENCY === 0); const isEW = (Math.abs(cellZ) % ROAD_FREQUENCY === 0);
+                             if (isNS && !isEW) { carX = cellWorldX + (Math.random() - 0.5) * CELL_SIZE * 0.15; carZ = cellWorldZ + (Math.random() - 0.5) * CELL_SIZE * 0.9; }
+                             else if (!isNS && isEW) { carX = cellWorldX + (Math.random() - 0.5) * CELL_SIZE * 0.9; carZ = cellWorldZ + (Math.random() - 0.5) * CELL_SIZE * 0.15; }
+                             else { carX = cellWorldX + (Math.random() - 0.5) * CELL_SIZE * 0.2; carZ = cellWorldZ + (Math.random() - 0.5) * CELL_SIZE * 0.2; }
+                             const carY = 0.2; const carRotY = Math.random() > 0.5 ? (isNS ? 0 : Math.PI / 2) : (isNS ? Math.PI : -Math.PI/2);
+                             if(carBody){ carBody.position.set(carX, carY, carZ); carBody.rotation.y = carRotY; scene.add(carBody); carBody.userData.type = 'car'; cellObjects.push({ points: carBody, type: 'car' }); }
+                             if(carLights){ carLights.position.set(carX, carY, carZ); carLights.rotation.y = carRotY; scene.add(carLights); carLights.userData.type = 'car'; cellObjects.push({ points: carLights, type: 'car' }); }
+                         }
+                     }
+                 } catch(e) { console.error(`Error generating cars for cell ${key}:`, e); }
+
+                 try { // People
+                     let peopleChance = 0;
+                     if (zoneType === 'downtown') peopleChance = 0.5 * densVal; else if (zoneType === 'residential') peopleChance = 0.35 * densVal;
+                     if (isRoadCell) peopleChance *= 1.5;
+                     if (Math.random() < peopleChance) {
+                        const numPeople = Math.floor(peoplePerCell * Math.random() * densVal);
+                        for(let i = 0; i < numPeople; i++) {
+                            const personData = generatePeoplePositions();
+                            const person = createPoints(personData.positions, basePeopleMaterial, personData.colorsArray);
+                            const personX = cellWorldX + (Math.random() - 0.5) * CELL_SIZE * 0.8; const personZ = cellWorldZ + (Math.random() - 0.5) * CELL_SIZE * 0.8; const personY = 0;
+                            if(person){ person.position.set(personX, personY, personZ); scene.add(person); person.userData.type = 'person'; cellObjects.push({ points: person, type: 'person' }); }
+                        }
+                     }
+                 } catch(e) { console.error(`Error generating people for cell ${key}:`, e); }
+
+                 activeCells.set(key, cellObjects);
+             });
+        }
+
+        // ====================================================================
+        // Collision Detection (Using BBox vs BBox)
+        // ====================================================================
+        function checkCollisions() {
+             if (!isInitializationComplete || !airplaneController || airplaneController.isDestroyed) return;
+
+             // Update airplane's world bounding box
+             airplaneBBox.setFromCenterAndSize(airplane.position, AIRPLANE_COLLISION_SIZE);
+
+             const checkRadius = 1; // Check current and adjacent cells
+             for (let x = currentPlayerCellX - checkRadius; x <= currentPlayerCellX + checkRadius; x++) {
+                 for (let z = currentPlayerCellZ - checkRadius; z <= currentPlayerCellZ + checkRadius; z++) {
+                     const key = `${x},${z}`;
+                     const cellObjects = activeCells.get(key);
+                     if (!cellObjects) continue;
+
+                     for (const objData of cellObjects) {
+                         // Only check against buildings and houses
+                         if (objData.type !== 'building' && objData.type !== 'house') continue;
+
+                         const objPoints = objData.points;
+                         // Ensure the object and its geometry/bounding box exist
+                         if (!objPoints || !objPoints.geometry || !objPoints.geometry.boundingBox) {
+                             // Compute bounding box if it doesn't exist (should have been done in createPoints)
+                             if(objPoints && objPoints.geometry && !objPoints.geometry.boundingBox) {
+                                 objPoints.geometry.computeBoundingBox();
+                                 if(!objPoints.geometry.boundingBox) continue; // Skip if still fails
+                             } else {
+                                continue; // Skip if no geometry
+                             }
+                         }
+
+                         try {
+                             // --- Distance Check ---
+                             const distanceSq = airplane.position.distanceToSquared(objPoints.position);
+                             if (distanceSq > COLLISION_DISTANCE_THRESHOLD * COLLISION_DISTANCE_THRESHOLD) {
+                                 continue; // Skip if object is too far away
+                             }
+
+                             // --- BBox vs BBox Check ---
+                             // Get the building's bounding box in local space
+                             const localBuildingBBox = objPoints.geometry.boundingBox;
+                             // Clone and transform it to world space using the object's matrix
+                             buildingBBox.copy(localBuildingBBox).applyMatrix4(objPoints.matrixWorld);
+
+                             // Check for intersection between airplane's AABB and building's world AABB
+                             if (airplaneBBox.intersectsBox(buildingBBox)) {
+                                 airplaneController.handleCollision(objPoints); // Pass the whole object
+                                 return; // One collision per frame is enough
+                             }
+                         } catch (collisionError) {
+                              console.error(`Error checking collision with object in cell ${key}:`, collisionError, objData);
                          }
                      }
                  }
-
-                 // 3. Trees
-                 let treeChance = 0;
-                 if (zoneType === 'park') treeChance = 0.8 * densVal;
-                 else if (zoneType === 'residential') treeChance = 0.2 * densVal;
-                 if (Math.random() < treeChance && !structurePlaced) {
-                     const numTrees = Math.floor(Math.random() * 5 * densVal) + 1;
-                     for (let i = 0; i < numTrees; i++) {
-                         const treePos = generateTreePositions(25);
-                         const canopyMat = baseTreeCanopyMaterial.clone(); canopyMat.color.copy(getRandomItem(treeCanopyColors));
-                         const treeCanopy = createPoints(treePos.canopyPositions, canopyMat);
-                         const treeTrunk = createPoints(treePos.trunkPositions, baseTreeTrunkMaterial);
-                         const treeX = cellWorldX + (Math.random() - 0.5) * cellSize * 0.9; const treeZ = cellWorldZ + (Math.random() - 0.5) * cellSize * 0.9;
-                         if(treeCanopy){ treeCanopy.position.set(treeX, 0, treeZ); scene.add(treeCanopy); cellData.trees.push(treeCanopy); }
-                         if(treeTrunk){ treeTrunk.position.set(treeX, 0, treeZ); scene.add(treeTrunk); cellData.trees.push(treeTrunk); }
-                     }
-                 }
-
-                 // 4. Cars
-                 if (isRoadCell && zoneType !== 'park') {
-                     const numCars = Math.floor(carsPerRoadCell * Math.random() * densVal);
-                     for(let i = 0; i < numCars; i++) {
-                         const carPos = generateCarPositions();
-                         const bodyMat = baseCarBodyMaterial.clone(); bodyMat.color.copy(getRandomItem(carBodyColors));
-                         const carBody = createPoints(carPos.bodyPositions, bodyMat);
-                         const carLights = createPoints(carPos.lightPositions, baseCarLightMaterial);
-                         const carX = cellWorldX + (Math.random() - 0.5) * cellSize * 0.9; const carZ = cellWorldZ + (Math.random() - 0.5) * cellSize * 0.9; const carY = 0.2;
-                         const carRotY = Math.random() * Math.PI * 2;
-                         if(carBody){ carBody.position.set(carX, carY, carZ); carBody.rotation.y = carRotY; scene.add(carBody); cellData.cars.push(carBody); }
-                         if(carLights){ carLights.position.set(carX, carY, carZ); carLights.rotation.y = carRotY; scene.add(carLights); cellData.cars.push(carLights); }
-                     }
-                 }
-
-                 // 5. People
-                 let peopleChance = 0;
-                 if (zoneType === 'downtown') peopleChance = 0.4 * densVal;
-                 else if (zoneType === 'residential') peopleChance = 0.3 * densVal;
-                 if (Math.random() < peopleChance) {
-                    const numPeople = Math.floor(peoplePerCell * Math.random() * densVal);
-                    for(let i = 0; i < numPeople; i++) {
-                        const personPos = generatePeoplePositions();
-                        const personMat = basePeopleMaterial.clone(); personMat.color.copy(getRandomItem(peopleColors));
-                        const person = createPoints(personPos, personMat);
-                        const personX = cellWorldX + (Math.random() - 0.5) * cellSize * 0.9; const personZ = cellWorldZ + (Math.random() - 0.5) * cellSize * 0.9; const personY = 0;
-                        if(person){ person.position.set(personX, personY, personZ); scene.add(person); cellData.people.push(person); }
-                    }
-                 }
-
-                activeCells.set(key, cellData);
-            });
+             }
         }
 
+        // ====================================================================
+        // Event Handlers
+        // ====================================================================
+        function onWindowResize() { if(!camera || !renderer) return; camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); if (composer) composer.setSize(window.innerWidth, window.innerHeight); }
+        function onKeyDown(event) { if (keys.hasOwnProperty(event.code)) { keys[event.code] = true; } if (event.code === 'KeyR' && airplaneController && airplaneController.isDestroyed && airplaneController.resetCooldown <= 0) { airplaneController.reset(); } }
+        function onKeyUp(event) { if (keys.hasOwnProperty(event.code)) { keys[event.code] = false; } }
 
-        function onWindowResize() {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            composer.setSize(window.innerWidth, window.innerHeight);
-        }
-        function onKeyDown(event) { if (keys.hasOwnProperty(event.code)) { keys[event.code] = true; event.preventDefault(); } }
-        function onKeyUp(event) { if (keys.hasOwnProperty(event.code)) { keys[event.code] = false; event.preventDefault(); } }
-
-        function updateAirplane(deltaTime) {
-            let speedChange = 0; if (keys.KeyW) speedChange += acceleration * deltaTime; if (keys.KeyS) speedChange -= acceleration * deltaTime;
-            airplaneSpeed += speedChange; airplaneSpeed = Math.max(minSpeed, Math.min(maxSpeed, airplaneSpeed));
-            let targetPitch = airplane.rotation.x; let targetRoll = airplane.rotation.z; let yawChange = 0;
-            if (keys.ArrowUp) targetPitch -= rotationSpeed; if (keys.ArrowDown) targetPitch += rotationSpeed; targetPitch = Math.max(-maxPitch, Math.min(maxPitch, targetPitch)); airplane.rotation.x += (targetPitch - airplane.rotation.x) * 0.1;
-            if (keys.ArrowLeft) targetRoll += rotationSpeed; if (keys.ArrowRight) targetRoll -= rotationSpeed; targetRoll = Math.max(-maxRoll, Math.min(maxRoll, targetRoll)); if (!keys.ArrowLeft && !keys.ArrowRight) { targetRoll -= airplane.rotation.z * rollRecoverySpeed; } airplane.rotation.z += (targetRoll - airplane.rotation.z) * 0.1;
-            if (keys.KeyA) yawChange += yawSpeed; if (keys.KeyD) yawChange -= yawSpeed; airplane.rotateY(yawChange);
-            forwardVector.set(0, 0, -1).applyQuaternion(airplane.quaternion);
-            airplane.position.addScaledVector(forwardVector, airplaneSpeed * deltaTime);
-            if (airplane.position.y < 1) { airplane.position.y = 1; airplane.rotation.x *= 0.9; airplane.rotation.z *= 0.9; }
-            if (speedInfoElement) speedInfoElement.textContent = (airplaneSpeed * SPEED_UNIT_FACTOR).toFixed(1);
-            if (altInfoElement) altInfoElement.textContent = (airplane.position.y * ALT_UNIT_FACTOR).toFixed(0);
-            if (hdgInfoElement) { projectedVector.copy(forwardVector).setY(0).normalize(); let heading = Math.atan2(projectedVector.x, projectedVector.z) * (180 / Math.PI); if (heading < 0) heading += 360; hdgInfoElement.textContent = heading.toFixed(0); }
-        }
-
-        function updateCamera() {
-            const offset = new THREE.Vector3(0, 7, 20); const targetPosition = airplane.localToWorld(offset.clone());
-            const lookAtOffset = new THREE.Vector3(0, 3, -40); const targetLookAt = airplane.localToWorld(lookAtOffset.clone());
-            camera.position.lerp(targetPosition, 0.06); const currentLookAt = new THREE.Vector3(); camera.getWorldDirection(currentLookAt); currentLookAt.multiplyScalar(10).add(camera.position); const finalLookAt = new THREE.Vector3().lerpVectors(currentLookAt, targetLookAt, 0.04); camera.lookAt(finalLookAt);
-         }
-
+        // ====================================================================
+        // Animation Loop
+        // ====================================================================
         function animate() {
             requestAnimationFrame(animate);
+            // IMPORTANT: Wait for full initialization before running updates
+            if (!isInitializationComplete) {
+                return;
+            }
+
             const deltaTime = clock.getDelta();
 
-            if (airplane) {
-                updateAirplane(deltaTime);
+            try {
+                if (airplaneController) airplaneController.update(deltaTime);
                 updateCamera();
-                // Grid update only handles details now
                 updateInfiniteGrid();
+                checkCollisions();
+                if (explosionManager) explosionManager.update(deltaTime);
+                if (smokeTrailManager) smokeTrailManager.update(deltaTime);
+
+                if (composer) composer.render(deltaTime);
+                else if (renderer) renderer.render(scene, camera);
+
+            } catch(error) {
+                 console.error("Error during animation loop:", error);
             }
-            if(composer) composer.render(deltaTime); // Render via composer
         }
 
-        init(); // Start
+        // ====================================================================
+        // Camera Update Function
+        // ====================================================================
+        function updateCamera() { if (!airplane || !camera) return; const baseOffset = tempVector3.set(0, 8, 22); const targetPosition = airplane.localToWorld(baseOffset.clone()); const lookAtOffset = tempVector3.set(0, 4, -50); const targetLookAt = airplane.localToWorld(lookAtOffset.clone()); camera.position.lerp(targetPosition, 0.05); const currentLookAt = tempVector3.set(0, 0, -1).applyQuaternion(camera.quaternion); currentLookAt.multiplyScalar(20).add(camera.position); const finalLookAt = currentLookAt.lerp(targetLookAt, 0.04); camera.lookAt(finalLookAt); }
+
+        // ====================================================================
+        // Utility Functions
+        // ====================================================================
+        function displayError(message) {
+             console.error("Displaying Error:", message);
+             if (loadingMessage) loadingMessage.textContent = message;
+             if (loadingStatusElement) loadingStatusElement.textContent = "Error!";
+             if (loadingOverlay && loadingOverlay.classList.contains('hidden')) {
+                  loadingOverlay.classList.remove('hidden'); // Ensure overlay is visible
+             }
+             if (progressBar) progressBar.style.backgroundColor = '#ff0000';
+             isInitializationComplete = false; // Halt simulation updates
+        }
+
+
+        // ====================================================================
+        // Start Simulation
+        // ====================================================================
+        init();
 
     </script>
 </body>
