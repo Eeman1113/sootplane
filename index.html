@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dense Yellow Particle City Sim</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; color: white; font-family: 'Consolas', 'Courier New', monospace; font-size: 14px;}
+        canvas { display: block; }
+        /* Enhanced HUD Styling */
+        .hud { position: absolute; background-color: rgba(0,0,0,0.6); padding: 8px 12px; border-radius: 4px; line-height: 1.5; pointer-events: none; z-index: 10; }
+        #info-controls { top: 10px; left: 10px; }
+        #info-flight { bottom: 10px; left: 10px; min-width: 150px;}
+        #info-status { top: 10px; right: 10px; text-align: right; }
+
+        /* Loading Overlay Styling */
+        #loading-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background-color: rgba(0, 0, 0, 0.9); display: flex; flex-direction: column;
+            justify-content: center; align-items: center; z-index: 100;
+            color: #eee; font-size: 1.2em; transition: opacity 0.5s ease-out;
+        }
+        #loading-message { margin-bottom: 20px; text-align: center; }
+        #progress-bar-container { width: 60%; max-width: 400px; height: 15px; background-color: #555; border-radius: 7px; overflow: hidden; box-shadow: inset 0 1px 3px rgba(0,0,0,0.3); }
+        #progress-bar { width: 0%; height: 100%; background-color: #4CAF50; border-radius: 7px; transition: width 0.2s linear; }
+        .loading-pulse { animation: pulse 1.5s infinite ease-in-out; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
+        #loading-overlay.hidden { opacity: 0; pointer-events: none; }
+    </style>
+</head>
+<body>
+    <div id="info-controls" class="hud">
+        Controls:<br> Arrows: Pitch/Roll<br> A/D: Yaw<br> W/S: Speed
+    </div>
+    <div id="info-flight" class="hud">
+        Speed: <span id="speed-info">0.0</span> kts<br>
+        Altitude: <span id="alt-info">0</span> ft<br>
+        Heading: <span id="hdg-info">0</span>&deg;
+    </div>
+     <div id="info-status" class="hud">
+        <span id="loading-status">Initializing...</span>
+    </div>
+
+    <div id="loading-overlay">
+        <div id="loading-message">Initializing...</div>
+        <div id="progress-bar-container">
+            <div id="progress-bar"></div>
+        </div>
+    </div>
+
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.163.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.163.0/examples/jsm/",
+                "simplex-noise": "https://unpkg.com/simplex-noise@4.0.1/dist/esm/simplex-noise.js"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+        import { createNoise2D } from 'simplex-noise';
+
+        // --- Noise Instances ---
+        const zoneNoise = createNoise2D(Math.random);
+        const densityNoise = createNoise2D(Math.random);
+
+        // --- Scene Setup ---
+        let scene, camera, renderer, clock, loadingManager;
+        let airplane;
+        let composer;
+
+        // Control & Speed Vars
+        let airplaneSpeed = 10.0; const minSpeed = 5.0; const maxSpeed = 100.0; const acceleration = 15.0;
+        const rotationSpeed = 0.03; const yawSpeed = 0.025; const maxPitch = Math.PI / 4; const maxRoll = Math.PI / 3; const rollRecoverySpeed = 0.03;
+
+        const keys = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false, KeyW: false, KeyS: false, KeyA: false, KeyD: false };
+
+        // --- Infinite Grid (for details other than ground) ---
+        const cellSize = 110;
+        const gridRadius = 4;
+        const roadFrequency = 4;
+        const houseDensity = 0.25;
+        const buildingDensity = 0.6; // Increased building chance
+        const treeDensity = 0.15;
+        const carsPerRoadCell = 5;
+        const peoplePerCell = 10;
+        const activeCells = new Map(); // Stores { roads:[], buildings:[], houses:[], trees:[], cars:[], people:[] }
+        let currentPlayerCellX = Infinity, currentPlayerCellZ = Infinity;
+
+        // --- Particle Counts ---
+        const buildingTotalParticles = 3000;
+        const houseWallParticles = 700; const houseWindowParticles = 80; const houseRoofParticles = 200;
+        const roadParticlesPerCell = 1200; const treeCanopyParticles = 550; const treeTrunkParticles = 55;
+        const carBodyParticles = 120; const carLightParticles = 8; const peopleParticles = 40;
+        // Ground plane particles
+        const groundPlaneSize = 15000; // Large plane size for 'infinite' feel
+        const groundGrassParticles = 500000; // Particles for the ground plane
+        const groundFlowerParticles = 5000;
+
+
+        // --- Materials (Shared Base Properties) ---
+        let particleTexture = null; const sharedMatProps = { size: 1.0, sizeAttenuation: true, alphaTest: 0.5, transparent: true };
+        const normalBlendProps = { blending: THREE.NormalBlending, depthWrite: true }; const additiveBlendProps = { blending: THREE.AdditiveBlending, depthWrite: false };
+
+        // --- Specific Base Materials ---
+        let baseGrassMaterial, baseRoadMaterial, baseTreeCanopyMaterial, baseTreeTrunkMaterial;
+        let baseBuildingMaterial; // Single yellow material for buildings
+        let baseHouseWallMaterial, baseHouseWindowMaterial, baseHouseRoofMaterial;
+        let baseCarBodyMaterial, baseCarLightMaterial; let basePeopleMaterial, baseFlowerMaterial;
+
+        // --- Color Palettes ---
+        const houseWallColors = [ new THREE.Color(0xD2691E), new THREE.Color(0xCD853F), new THREE.Color(0xF4A460), new THREE.Color(0xDEB887), new THREE.Color(0xFFE4C4) ];
+        const houseRoofColors = [ new THREE.Color(0x555555), new THREE.Color(0x444444), new THREE.Color(0x696969), new THREE.Color(0x778899) ];
+        const treeCanopyColors = [ new THREE.Color(0x228B22), new THREE.Color(0x556B2F), new THREE.Color(0x006400), new THREE.Color(0x6B8E23) ];
+        const carBodyColors = [ new THREE.Color(0xFF0000), new THREE.Color(0x0000FF), new THREE.Color(0xFFFFFF), new THREE.Color(0x333333), new THREE.Color(0xCCCCCC), new THREE.Color(0x008080) ];
+        const peopleColors = [ new THREE.Color(0xFF00FF), new THREE.Color(0x00FFFF), new THREE.Color(0xFFA500), new THREE.Color(0xADFF2F), new THREE.Color(0xEE82EE) ];
+        const flowerColors = [ new THREE.Color(0xFF69B4), new THREE.Color(0x1E90FF), new THREE.Color(0xFFD700), new THREE.Color(0xBA55D3)];
+
+
+        // --- DOM Element References ---
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const loadingMessage = document.getElementById('loading-message');
+        const progressBar = document.getElementById('progress-bar');
+        const loadingStatusElement = document.getElementById('loading-status');
+        const speedInfoElement = document.getElementById('speed-info');
+        const altInfoElement = document.getElementById('alt-info');
+        const hdgInfoElement = document.getElementById('hdg-info');
+
+        // Conversion factors & Temp vectors
+        const SPEED_UNIT_FACTOR = 1.944; const ALT_UNIT_FACTOR = 3.281;
+        const forwardVector = new THREE.Vector3(); const projectedVector = new THREE.Vector3();
+
+        function init() {
+             loadingOverlay.classList.remove('hidden');
+             loadingMessage.textContent = 'Initializing...';
+             progressBar.style.width = '0%';
+
+            loadingManager = new THREE.LoadingManager(
+                () => { // onLoad
+                    console.log('Assets loaded!');
+                    progressBar.style.width = '100%';
+                    loadingMessage.textContent = 'Generating Scenery... Please Wait...';
+                    progressBar.classList.add('loading-pulse');
+
+                    // Create Base Materials
+                    sharedMatProps.map = particleTexture;
+                    baseGrassMaterial = new THREE.PointsMaterial({ ...sharedMatProps, color: 0x4CAF50, ...normalBlendProps, size: 1.2 });
+                    baseFlowerMaterial = new THREE.PointsMaterial({ ...sharedMatProps, size: 0.8, ...normalBlendProps });
+                    baseRoadMaterial = new THREE.PointsMaterial({ ...sharedMatProps, color: 0x333333, size: 0.8, ...normalBlendProps });
+                    baseTreeCanopyMaterial = new THREE.PointsMaterial({ ...sharedMatProps, size: 1.5, ...normalBlendProps });
+                    baseTreeTrunkMaterial = new THREE.PointsMaterial({ ...sharedMatProps, color: 0x8B4513, size: 0.6, ...normalBlendProps });
+                    baseBuildingMaterial = new THREE.PointsMaterial({ ...sharedMatProps, color: 0xFFFF00, size: 1.5, ...additiveBlendProps });
+                    baseHouseWallMaterial = new THREE.PointsMaterial({ ...sharedMatProps, size: 1.0, ...normalBlendProps });
+                    baseHouseWindowMaterial = new THREE.PointsMaterial({ ...sharedMatProps, color: 0xFFFFE0, size: 1.2, ...additiveBlendProps });
+                    baseHouseRoofMaterial = new THREE.PointsMaterial({ ...sharedMatProps, size: 0.9, ...normalBlendProps });
+                    baseCarBodyMaterial = new THREE.PointsMaterial({ ...sharedMatProps, size: 0.7, ...normalBlendProps });
+                    baseCarLightMaterial = new THREE.PointsMaterial({ ...sharedMatProps, color: 0xFFFFFF, size: 1.0, ...additiveBlendProps });
+                    basePeopleMaterial = new THREE.PointsMaterial({ ...sharedMatProps, size: 0.9, ...normalBlendProps });
+
+                    // Create the single large ground plane FIRST
+                    createInfiniteGround();
+
+                    setupPostProcessing();
+
+                    // Perform Initial Grid Generation for details
+                    setTimeout(() => {
+                        updateInfiniteGrid();
+                        console.log('Initial detail grid generated.');
+                        loadingOverlay.classList.add('hidden');
+                        loadingStatusElement.textContent = 'Ready';
+                    }, 50);
+
+                },
+                (url, itemsLoaded, itemsTotal) => { // onProgress
+                    const progress = Math.round((itemsLoaded / itemsTotal) * 100);
+                    progressBar.style.width = progress + '%';
+                    loadingMessage.textContent = `Loading Assets: ${progress}%`;
+                },
+                (url) => { // onError
+                     console.error('Error loading file:', url);
+                     loadingMessage.textContent = `Error loading: ${url}. Please refresh.`;
+                     loadingStatusElement.textContent = 'Error!';
+                     progressBar.style.backgroundColor = '#ff0000';
+                     progressBar.classList.remove('loading-pulse');
+                 }
+            );
+
+            // Load Particle Texture
+            const textureLoader = new THREE.TextureLoader(loadingManager);
+            particleTexture = textureLoader.load('https://threejs.org/examples/textures/sprites/disc.png');
+
+            // --- Basic Scene Setup ---
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x000000, 0.0008);
+            clock = new THREE.Clock();
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.5, 10000);
+            camera.position.set(0, 70, 130);
+            camera.lookAt(0, 0, 0);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.0;
+            renderer.outputColorSpace = THREE.SRGBColorSpace;
+            renderer.shadowMap.enabled = false;
+            document.body.appendChild(renderer.domElement);
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0x505050);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+            dirLight.position.set(70, 120, 60);
+            scene.add(dirLight);
+
+            scene.background = new THREE.Color(0x000000);
+
+            // Airplane
+            airplane = new THREE.Group();
+            const planeMaterial = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.7, roughness: 0.5, emissive: new THREE.Color(0x00ffff), emissiveIntensity: 0.8 });
+            const bodyGeometry = new THREE.CylinderGeometry(0.8, 1, 8, 16); const wingGeometry = new THREE.BoxGeometry(8, 0.3, 2); const tailWingGeometry = new THREE.BoxGeometry(3, 0.2, 1); const rudderGeometry = new THREE.BoxGeometry(0.2, 2, 1);
+            const body = new THREE.Mesh(bodyGeometry, planeMaterial); body.rotation.x = Math.PI / 2; airplane.add(body);
+            const leftWing = new THREE.Mesh(wingGeometry, planeMaterial); leftWing.position.set(-4.5, 0, 0); airplane.add(leftWing);
+            const rightWing = new THREE.Mesh(wingGeometry, planeMaterial); rightWing.position.set(4.5, 0, 0); airplane.add(rightWing);
+            const tailWing = new THREE.Mesh(tailWingGeometry, planeMaterial); tailWing.position.set(0, 0, 3.5); airplane.add(tailWing);
+            const rudder = new THREE.Mesh(rudderGeometry, planeMaterial); rudder.position.set(0, 1, 3.5); airplane.add(rudder);
+            airplane.position.set(0, 50, 0);
+            airplane.rotation.order = 'YXZ';
+            scene.add(airplane);
+
+            // Event Listeners
+            window.addEventListener('resize', onWindowResize, false);
+            document.addEventListener('keydown', onKeyDown, false);
+            document.addEventListener('keyup', onKeyUp, false);
+
+            animate(); // Start animation loop
+        }
+
+        function setupPostProcessing() {
+            composer = new EffectComposer(renderer);
+            const renderPass = new RenderPass(scene, camera);
+            composer.addPass(renderPass);
+            const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.0, 0.4, 0.8);
+            composer.addPass(bloomPass);
+        }
+
+        // --- Particle Generation Functions ---
+
+        function createPoints(positions, material) {
+            if (!positions || positions.length === 0) return null;
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geometry.computeBoundingSphere();
+            return new THREE.Points(geometry, material);
+        }
+
+        function generateInfiniteGroundPositions(planeSize, numGrass, numFlowers) {
+            const grassPositions = []; const flowerPositions = []; const halfSize = planeSize / 2;
+            for (let i = 0; i < numGrass; i++) { grassPositions.push( (Math.random() - 0.5) * planeSize, 0, (Math.random() - 0.5) * planeSize ); }
+            for (let i = 0; i < numFlowers; i++) { flowerPositions.push( (Math.random() - 0.5) * planeSize, 0.1, (Math.random() - 0.5) * planeSize ); }
+            return { grassPositions, flowerPositions };
+        }
+
+        function createInfiniteGround() {
+            if (!baseGrassMaterial || !baseFlowerMaterial) return;
+            const { grassPositions, flowerPositions } = generateInfiniteGroundPositions( groundPlaneSize, groundGrassParticles, groundFlowerParticles );
+            const grassPlane = createPoints(grassPositions, baseGrassMaterial);
+            if (grassPlane) { grassPlane.position.set(0, 0, 0); scene.add(grassPlane); console.log(`Created infinite grass plane with ${groundGrassParticles} particles.`); }
+             if (flowerPositions.length > 0) {
+                 const flowerMat = baseFlowerMaterial.clone(); flowerMat.color.copy(getRandomItem(flowerColors));
+                 const flowerPlane = createPoints(flowerPositions, flowerMat);
+                 if (flowerPlane) { flowerPlane.position.set(0, 0, 0); scene.add(flowerPlane); console.log(`Added ${groundFlowerParticles} flowers.`); }
+             }
+        }
+
+        function generateRoadPositions(cellSize, cellX, cellZ) {
+            const positions = []; const roadWidth = cellSize * 0.2; const particleDensity = roadParticlesPerCell / (cellSize * roadWidth * 2);
+            const hasNSroad = (Math.abs(cellX) % roadFrequency === 0); const hasEWroad = (Math.abs(cellZ) % roadFrequency === 0);
+            if (hasNSroad) { const count = Math.ceil(cellSize * roadWidth * particleDensity); for (let i = 0; i < count; i++) { positions.push( (Math.random() - 0.5) * roadWidth, 0, (Math.random() - 0.5) * cellSize ); } }
+            if (hasEWroad) { const count = Math.ceil(cellSize * roadWidth * particleDensity); for (let i = 0; i < count; i++) { positions.push( (Math.random() - 0.5) * cellSize, 0, (Math.random() - 0.5) * roadWidth ); } }
+            if (hasNSroad && hasEWroad) { const count = Math.ceil(roadWidth * roadWidth * particleDensity * 2); for (let i = 0; i < count; i++) { positions.push( (Math.random() - 0.5) * roadWidth, 0, (Math.random() - 0.5) * roadWidth ); } }
+            return positions;
+        }
+
+        // Modified Building generation for single yellow type
+        function generateBuildingPositions(cellSize, maxHeight) {
+            const positions = [];
+            const width = Math.random() * (cellSize * 0.5) + (cellSize * 0.15); const depth = Math.random() * (cellSize * 0.5) + (cellSize * 0.15); const height = Math.random() * (maxHeight - 30) + 30;
+            const halfW = width / 2; const halfD = depth / 2;
+             for (let i = 0; i < buildingTotalParticles; i++) {
+                 const face = Math.floor(Math.random() * 5); let x, y, z;
+                 if (face === 0) { x = halfW; y = Math.random() * height; z = (Math.random() - 0.5) * depth; } else if (face === 1) { x = -halfW; y = Math.random() * height; z = (Math.random() - 0.5) * depth; } else if (face === 2) { x = (Math.random() - 0.5) * width; y = height; z = (Math.random() - 0.5) * depth; } else if (face === 3) { x = (Math.random() - 0.5) * width; y = Math.random() * height; z = halfD; } else { x = (Math.random() - 0.5) * width; y = Math.random() * height; z = -halfD; }
+                 x += (Math.random() - 0.5) * 0.5; y += (Math.random() - 0.5) * 0.5; z += (Math.random() - 0.5) * 0.5; positions.push(x, y, z);
+            }
+            return { positions }; // Only one array needed
+        }
+
+        // House generation
+        function generateHousePositions(cellSize) {
+            const wallPositions = []; const windowPositions = []; const roofPositions = [];
+            const width = Math.random() * (cellSize * 0.25) + (cellSize * 0.1); const depth = Math.random() * (cellSize * 0.25) + (cellSize * 0.1); const wallHeight = Math.random() * 8 + 4; const roofHeight = wallHeight + Math.random() * (width * 0.5) + 2;
+            const halfW = width / 2; const halfD = depth / 2;
+             for (let i = 0; i < houseWallParticles; i++) { const face = Math.floor(Math.random() * 4); let x, y, z; if (face === 0) { x = halfW; y = Math.random() * wallHeight; z = (Math.random() - 0.5) * depth; } else if (face === 1) { x = -halfW; y = Math.random() * wallHeight; z = (Math.random() - 0.5) * depth; } else if (face === 2) { x = (Math.random() - 0.5) * width; y = Math.random() * wallHeight; z = halfD; } else { x = (Math.random() - 0.5) * width; y = Math.random() * wallHeight; z = -halfD; } wallPositions.push(x, y, z); }
+             for (let i = 0; i < houseWindowParticles; i++) { const face = Math.floor(Math.random() * 4); let x, y, z; if (face === 0) { x = halfW; y = Math.random() * wallHeight; z = (Math.random() - 0.5) * depth; } else if (face === 1) { x = -halfW; y = Math.random() * wallHeight; z = (Math.random() - 0.5) * depth; } else if (face === 2) { x = (Math.random() - 0.5) * width; y = Math.random() * wallHeight; z = halfD; } else { x = (Math.random() - 0.5) * width; y = Math.random() * wallHeight; z = -halfD; } windowPositions.push(x * 0.98, y, z * 0.98); }
+             for (let i = 0; i < houseRoofParticles; i++) { const pz = (Math.random() - 0.5) * depth; const px_norm = Math.random(); const px = (px_norm - 0.5) * width; const py = wallHeight + (roofHeight - wallHeight) * (1 - Math.abs(px) / halfW); roofPositions.push(px + (Math.random()-0.5)*0.2, py + (Math.random()-0.5)*0.2, pz + (Math.random()-0.5)*0.2); }
+            return { wallPositions, windowPositions, roofPositions };
+        }
+
+        // Tree generation
+        function generateTreePositions(maxHeight) {
+            const canopyPositions = []; const trunkPositions = []; const trunkHeight = Math.random() * 4 + 2; const canopyRadius = Math.random() * 3 + 1.5; const canopyHeight = Math.random() * 5 + canopyRadius;
+            for (let i = 0; i < treeTrunkParticles; i++) { trunkPositions.push(0, (i / treeTrunkParticles) * trunkHeight, 0); }
+            for (let i = 0; i < treeCanopyParticles; i++) { const u=Math.random(), v=Math.random(), theta=2*Math.PI*u, phi=Math.acos(2*v-1), r=canopyRadius*Math.cbrt(Math.random()); canopyPositions.push( r * Math.sin(phi) * Math.cos(theta), trunkHeight + r * Math.cos(phi) * (canopyHeight/canopyRadius), r * Math.sin(phi) * Math.sin(theta) ); }
+            return { canopyPositions, trunkPositions };
+        }
+
+        // Car generation
+        function generateCarPositions() {
+             const bodyPositions = []; const lightPositions = []; const length = 4; const width = 1.8; const height = 1.5; const halfL = length/2; const halfW = width/2;
+             for(let i=0; i<carBodyParticles; i++){ const face = Math.floor(Math.random() * 6); let x,y,z; if (face === 0) { x = halfW; y = Math.random() * height; z = (Math.random() - 0.5) * length; } else if (face === 1) { x = -halfW; y = Math.random() * height; z = (Math.random() - 0.5) * length; } else if (face === 2) { x = (Math.random() - 0.5) * width; y = height; z = (Math.random() - 0.5) * length; } else if (face === 3) { x = (Math.random() - 0.5) * width; y = 0; z = (Math.random() - 0.5) * length; } else if (face === 4) { x = (Math.random() - 0.5) * width; y = Math.random() * height; z = halfL; } else { x = (Math.random() - 0.5) * width; y = Math.random() * height; z = -halfL; } bodyPositions.push(x,y,z); }
+             const lightY = height * 0.4; for(let i=0; i<carLightParticles/2; i++) { lightPositions.push((Math.random()>0.5?1:-1)*halfW*0.8, lightY, halfL); lightPositions.push((Math.random()>0.5?1:-1)*halfW*0.8, lightY, -halfL); }
+             return { bodyPositions, lightPositions };
+        }
+
+        // People generation
+         function generatePeoplePositions() {
+             const positions = []; const personHeight = 1.7;
+             for(let i=0; i<peopleParticles; i++){ positions.push(0, (i / peopleParticles) * personHeight, 0); }
+            return positions;
+         }
+
+        // Helper to get random item from array
+        function getRandomItem(arr) {
+            if (!arr || arr.length === 0) return null;
+            return arr[Math.floor(Math.random() * arr.length)];
+        }
+
+
+        // --- Grid Logic for Detail Objects (No Grass Here Anymore) ---
+        function updateInfiniteGrid() {
+             // Check required base materials
+             if (!airplane || !baseRoadMaterial || !baseTreeCanopyMaterial || !baseTreeTrunkMaterial ||
+                 !baseBuildingMaterial || !baseHouseWallMaterial || !baseHouseWindowMaterial || !baseHouseRoofMaterial ||
+                 !baseCarBodyMaterial || !baseCarLightMaterial || !basePeopleMaterial) return;
+
+            const newPlayerCellX = Math.round(airplane.position.x / cellSize);
+            const newPlayerCellZ = Math.round(airplane.position.z / cellSize);
+
+            if (newPlayerCellX === currentPlayerCellX && newPlayerCellZ === currentPlayerCellZ) return;
+
+            currentPlayerCellX = newPlayerCellX;
+            currentPlayerCellZ = newPlayerCellZ;
+
+            const cellsToRemove = new Set(activeCells.keys());
+            const cellsToAdd = new Set();
+
+            // Determine required cells
+            for (let x = currentPlayerCellX - gridRadius; x <= currentPlayerCellX + gridRadius; x++) {
+                for (let z = currentPlayerCellZ - gridRadius; z <= currentPlayerCellZ + gridRadius; z++) {
+                    const key = `${x},${z}`;
+                    if (activeCells.has(key)) { cellsToRemove.delete(key); } else { cellsToAdd.add(key); }
+                }
+            }
+
+            // --- Remove Old Cells ---
+            cellsToRemove.forEach(key => {
+                const cellData = activeCells.get(key);
+                if (cellData) {
+                    // Helper to remove array of objects & dispose geometry/cloned materials
+                    const removeArray = (arr) => {
+                        if (!arr) return;
+                        arr.forEach(obj => {
+                            if(obj) {
+                                scene.remove(obj);
+                                if(obj.geometry) obj.geometry.dispose();
+                                const baseMaterials = [ baseRoadMaterial, baseTreeCanopyMaterial, baseTreeTrunkMaterial, baseBuildingMaterial, baseHouseWallMaterial, baseHouseWindowMaterial, baseHouseRoofMaterial, baseCarBodyMaterial, baseCarLightMaterial, basePeopleMaterial];
+                                let isBase = false;
+                                for (const baseMat of baseMaterials) { if (baseMat && obj.material.uuid === baseMat.uuid) { isBase = true; break; } }
+                                if (!isBase && obj.material && typeof obj.material.dispose === 'function') { obj.material.dispose(); }
+                            }
+                        });
+                    };
+                    // Remove all detail types
+                    removeArray(cellData.roads); removeArray(cellData.buildings); removeArray(cellData.houses);
+                    removeArray(cellData.trees); removeArray(cellData.cars); removeArray(cellData.people);
+                }
+                activeCells.delete(key);
+            });
+
+            // --- Add New Cells ---
+            cellsToAdd.forEach(key => {
+                const coords = key.split(',').map(Number);
+                const cellX = coords[0]; const cellZ = coords[1];
+                const cellWorldX = cellX * cellSize; const cellWorldZ = cellZ * cellSize;
+
+                const zoneVal = zoneNoise(cellX * 0.05, cellZ * 0.05);
+                const densVal = (densityNoise(cellX * 0.1, cellZ * 0.1) + 1) / 2;
+
+                let zoneType = 'residential';
+                if (zoneVal < -0.3) zoneType = 'park';
+                else if (zoneVal > 0.4) zoneType = 'downtown';
+
+                // Initialize cell data - NO GRASS
+                let cellData = { roads: [], buildings: [], houses: [], trees: [], cars: [], people: [] };
+
+                // 1. Roads
+                const isRoadCell = (Math.abs(cellX) % roadFrequency === 0) || (Math.abs(cellZ) % roadFrequency === 0);
+                if (isRoadCell && zoneType !== 'park') {
+                    const roadPos = generateRoadPositions(cellSize, cellX, cellZ); const roadSegment = createPoints(roadPos, baseRoadMaterial);
+                    if (roadSegment) { roadSegment.position.set(cellWorldX, 0.1, cellWorldZ); scene.add(roadSegment); cellData.roads.push(roadSegment); }
+                }
+
+                 // 2. Buildings (Yellow) / Houses (Brown/etc.)
+                 let structurePlaced = false;
+                 if (!isRoadCell || zoneType === 'downtown') {
+                     let placeChance = 0;
+                     // Use INCREASED building density/chance
+                     if (zoneType === 'downtown') placeChance = 0.85 * densVal; // Higher chance downtown
+                     else if (zoneType === 'residential') placeChance = 0.4 * densVal; // Moderate house chance
+
+                     const buildOrHouse = Math.random();
+
+                     if (buildOrHouse < placeChance) {
+                         structurePlaced = true;
+                         const offsetX = (Math.random() - 0.5) * cellSize * 0.6; const offsetZ = (Math.random() - 0.5) * cellSize * 0.6;
+                         const structureWorldX = cellWorldX + offsetX; const structureWorldZ = cellWorldZ + offsetZ;
+
+                         // Place Yellow Building OR House
+                         if ((zoneType === 'downtown' && Math.random() < 0.9) || (zoneType === 'residential' && Math.random() < 0.2)) {
+                             const buildingPos = generateBuildingPositions(cellSize, 400 * densVal + 60);
+                             const building = createPoints(buildingPos.positions, baseBuildingMaterial); // Single yellow material
+                             if (building) { building.position.set(structureWorldX, 0, structureWorldZ); scene.add(building); cellData.buildings.push(building); }
+                         } else {
+                             const housePos = generateHousePositions(cellSize);
+                             const wallMat = baseHouseWallMaterial.clone(); wallMat.color.copy(getRandomItem(houseWallColors));
+                             const roofMat = baseHouseRoofMaterial.clone(); roofMat.color.copy(getRandomItem(houseRoofColors));
+                             const houseWalls = createPoints(housePos.wallPositions, wallMat);
+                             const houseWindows = createPoints(housePos.windowPositions, baseHouseWindowMaterial);
+                             const houseRoof = createPoints(housePos.roofPositions, roofMat);
+                             if (houseWalls) { houseWalls.position.set(structureWorldX, 0, structureWorldZ); scene.add(houseWalls); cellData.houses.push(houseWalls); }
+                             if (houseWindows) { houseWindows.position.set(structureWorldX, 0, structureWorldZ); scene.add(houseWindows); cellData.houses.push(houseWindows); }
+                             if (houseRoof) { houseRoof.position.set(structureWorldX, 0, structureWorldZ); scene.add(houseRoof); cellData.houses.push(houseRoof); }
+                         }
+                     }
+                 }
+
+                 // 3. Trees
+                 let treeChance = 0;
+                 if (zoneType === 'park') treeChance = 0.8 * densVal;
+                 else if (zoneType === 'residential') treeChance = 0.2 * densVal;
+                 if (Math.random() < treeChance && !structurePlaced) {
+                     const numTrees = Math.floor(Math.random() * 5 * densVal) + 1;
+                     for (let i = 0; i < numTrees; i++) {
+                         const treePos = generateTreePositions(25);
+                         const canopyMat = baseTreeCanopyMaterial.clone(); canopyMat.color.copy(getRandomItem(treeCanopyColors));
+                         const treeCanopy = createPoints(treePos.canopyPositions, canopyMat);
+                         const treeTrunk = createPoints(treePos.trunkPositions, baseTreeTrunkMaterial);
+                         const treeX = cellWorldX + (Math.random() - 0.5) * cellSize * 0.9; const treeZ = cellWorldZ + (Math.random() - 0.5) * cellSize * 0.9;
+                         if(treeCanopy){ treeCanopy.position.set(treeX, 0, treeZ); scene.add(treeCanopy); cellData.trees.push(treeCanopy); }
+                         if(treeTrunk){ treeTrunk.position.set(treeX, 0, treeZ); scene.add(treeTrunk); cellData.trees.push(treeTrunk); }
+                     }
+                 }
+
+                 // 4. Cars
+                 if (isRoadCell && zoneType !== 'park') {
+                     const numCars = Math.floor(carsPerRoadCell * Math.random() * densVal);
+                     for(let i = 0; i < numCars; i++) {
+                         const carPos = generateCarPositions();
+                         const bodyMat = baseCarBodyMaterial.clone(); bodyMat.color.copy(getRandomItem(carBodyColors));
+                         const carBody = createPoints(carPos.bodyPositions, bodyMat);
+                         const carLights = createPoints(carPos.lightPositions, baseCarLightMaterial);
+                         const carX = cellWorldX + (Math.random() - 0.5) * cellSize * 0.9; const carZ = cellWorldZ + (Math.random() - 0.5) * cellSize * 0.9; const carY = 0.2;
+                         const carRotY = Math.random() * Math.PI * 2;
+                         if(carBody){ carBody.position.set(carX, carY, carZ); carBody.rotation.y = carRotY; scene.add(carBody); cellData.cars.push(carBody); }
+                         if(carLights){ carLights.position.set(carX, carY, carZ); carLights.rotation.y = carRotY; scene.add(carLights); cellData.cars.push(carLights); }
+                     }
+                 }
+
+                 // 5. People
+                 let peopleChance = 0;
+                 if (zoneType === 'downtown') peopleChance = 0.4 * densVal;
+                 else if (zoneType === 'residential') peopleChance = 0.3 * densVal;
+                 if (Math.random() < peopleChance) {
+                    const numPeople = Math.floor(peoplePerCell * Math.random() * densVal);
+                    for(let i = 0; i < numPeople; i++) {
+                        const personPos = generatePeoplePositions();
+                        const personMat = basePeopleMaterial.clone(); personMat.color.copy(getRandomItem(peopleColors));
+                        const person = createPoints(personPos, personMat);
+                        const personX = cellWorldX + (Math.random() - 0.5) * cellSize * 0.9; const personZ = cellWorldZ + (Math.random() - 0.5) * cellSize * 0.9; const personY = 0;
+                        if(person){ person.position.set(personX, personY, personZ); scene.add(person); cellData.people.push(person); }
+                    }
+                 }
+
+                activeCells.set(key, cellData);
+            });
+        }
+
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        }
+        function onKeyDown(event) { if (keys.hasOwnProperty(event.code)) { keys[event.code] = true; event.preventDefault(); } }
+        function onKeyUp(event) { if (keys.hasOwnProperty(event.code)) { keys[event.code] = false; event.preventDefault(); } }
+
+        function updateAirplane(deltaTime) {
+            let speedChange = 0; if (keys.KeyW) speedChange += acceleration * deltaTime; if (keys.KeyS) speedChange -= acceleration * deltaTime;
+            airplaneSpeed += speedChange; airplaneSpeed = Math.max(minSpeed, Math.min(maxSpeed, airplaneSpeed));
+            let targetPitch = airplane.rotation.x; let targetRoll = airplane.rotation.z; let yawChange = 0;
+            if (keys.ArrowUp) targetPitch -= rotationSpeed; if (keys.ArrowDown) targetPitch += rotationSpeed; targetPitch = Math.max(-maxPitch, Math.min(maxPitch, targetPitch)); airplane.rotation.x += (targetPitch - airplane.rotation.x) * 0.1;
+            if (keys.ArrowLeft) targetRoll += rotationSpeed; if (keys.ArrowRight) targetRoll -= rotationSpeed; targetRoll = Math.max(-maxRoll, Math.min(maxRoll, targetRoll)); if (!keys.ArrowLeft && !keys.ArrowRight) { targetRoll -= airplane.rotation.z * rollRecoverySpeed; } airplane.rotation.z += (targetRoll - airplane.rotation.z) * 0.1;
+            if (keys.KeyA) yawChange += yawSpeed; if (keys.KeyD) yawChange -= yawSpeed; airplane.rotateY(yawChange);
+            forwardVector.set(0, 0, -1).applyQuaternion(airplane.quaternion);
+            airplane.position.addScaledVector(forwardVector, airplaneSpeed * deltaTime);
+            if (airplane.position.y < 1) { airplane.position.y = 1; airplane.rotation.x *= 0.9; airplane.rotation.z *= 0.9; }
+            if (speedInfoElement) speedInfoElement.textContent = (airplaneSpeed * SPEED_UNIT_FACTOR).toFixed(1);
+            if (altInfoElement) altInfoElement.textContent = (airplane.position.y * ALT_UNIT_FACTOR).toFixed(0);
+            if (hdgInfoElement) { projectedVector.copy(forwardVector).setY(0).normalize(); let heading = Math.atan2(projectedVector.x, projectedVector.z) * (180 / Math.PI); if (heading < 0) heading += 360; hdgInfoElement.textContent = heading.toFixed(0); }
+        }
+
+        function updateCamera() {
+            const offset = new THREE.Vector3(0, 7, 20); const targetPosition = airplane.localToWorld(offset.clone());
+            const lookAtOffset = new THREE.Vector3(0, 3, -40); const targetLookAt = airplane.localToWorld(lookAtOffset.clone());
+            camera.position.lerp(targetPosition, 0.06); const currentLookAt = new THREE.Vector3(); camera.getWorldDirection(currentLookAt); currentLookAt.multiplyScalar(10).add(camera.position); const finalLookAt = new THREE.Vector3().lerpVectors(currentLookAt, targetLookAt, 0.04); camera.lookAt(finalLookAt);
+         }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const deltaTime = clock.getDelta();
+
+            if (airplane) {
+                updateAirplane(deltaTime);
+                updateCamera();
+                // Grid update only handles details now
+                updateInfiniteGrid();
+            }
+            if(composer) composer.render(deltaTime); // Render via composer
+        }
+
+        init(); // Start
+
+    </script>
+</body>
+</html>
