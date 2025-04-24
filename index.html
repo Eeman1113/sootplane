@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Particle City Sim - Collision & HP Tuning</title> <style>
+    <title>Particle City Sim - Minimap Update</title> <style>
         /* Basic reset and body styling */
         body {
             margin: 0;
@@ -14,7 +14,7 @@
             font-size: 14px;
         }
         /* Ensure canvas takes full screen */
-        canvas {
+        canvas#main-canvas { /* Added ID for main canvas */
             display: block;
             width: 100vw;
             height: 100vh;
@@ -27,7 +27,7 @@
             border-radius: 6px;
             line-height: 1.6;
             pointer-events: none; /* Don't block mouse events */
-            z-index: 10;
+            z-index: 10; /* Ensure HUD is above minimap */
             box-shadow: 0 2px 5px rgba(0,0,0,0.3);
             font-size: 13px; /* Slightly smaller HUD font */
             border: 1px solid rgba(255, 255, 255, 0.1);
@@ -35,6 +35,18 @@
         #info-controls { top: 15px; left: 15px; }
         #info-flight { bottom: 15px; left: 15px; min-width: 170px;} /* Wider for HP */
         #info-status { top: 15px; right: 15px; text-align: right; }
+        /* Score Display */
+        #score-display {
+            font-size: 1.1em; /* Slightly larger score */
+            font-weight: bold;
+            color: #00ffff; /* Cyan color */
+            transition: color 0.1s ease-out, transform 0.1s ease-out; /* Smooth flash */
+        }
+        #score-display.flash {
+            color: #ffffff; /* Flash white */
+            transform: scale(1.1); /* Briefly enlarge */
+        }
+
 
         /* HP Bar Styling */
         #hp-bar-container {
@@ -102,9 +114,32 @@
         .loading-pulse { animation: pulse 1.5s infinite ease-in-out; }
         @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.7; } 100% { opacity: 1; } }
         #loading-overlay.hidden { opacity: 0; pointer-events: none; }
+
+        /* Minimap Styling */
+        #minimap-container {
+            position: absolute;
+            bottom: 15px;
+            right: 15px;
+            width: 180px; /* Slightly larger */
+            height: 180px;
+            border: 2px solid #666;
+            background-color: rgba(10, 10, 10, 0.85); /* Darker background */
+            border-radius: 8px;
+            overflow: hidden;
+            z-index: 5; /* Below HUD */
+            box-shadow: 0 3px 8px rgba(0,0,0,0.5);
+        }
+        #minimap-canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
     </style>
 </head>
 <body>
+    <canvas id="main-canvas"></canvas>
+
     <div id="info-controls" class="hud">
         Controls:<br> Arrows: Pitch/Roll<br> A/D: Yaw<br> W/S: Speed<br> R: Reset (after destroyed)
     </div>
@@ -115,14 +150,18 @@
         HP: <div id="hp-bar-container"><div id="hp-bar"></div></div>
     </div>
      <div id="info-status" class="hud">
-        Status: <span id="loading-status">Initializing...</span>
-    </div>
+        Status: <span id="loading-status">Initializing...</span><br>
+        Score: <span id="score-display">0</span> </div>
     <div id="collision-warning">DESTROYED!<br><small>Press R to Reset</small></div>
     <div id="loading-overlay">
         <div id="loading-message">Initializing Simulation...</div>
         <div id="progress-bar-container">
             <div id="progress-bar"></div>
         </div>
+    </div>
+
+    <div id="minimap-container">
+        <canvas id="minimap-canvas"></canvas>
     </div>
 
     <script type="importmap">
@@ -149,21 +188,34 @@
         // Constants & Configuration
         // ====================================================================
         // --- Simulation & World ---
-        const CELL_SIZE = 110; const GRID_RADIUS = 4; const ROAD_FREQUENCY = 4;
+        const CELL_SIZE = 110; const GRID_RADIUS = 4;
+        const MAIN_ROAD_FREQUENCY = 8; // Main roads less frequent
+        const SECONDARY_ROAD_FREQUENCY = 4; // Secondary roads more frequent
         const GROUND_PLANE_SIZE = 15000; const FOG_DENSITY = 0.0007;
-        const DOWNTOWN_BUILDING_CHANCE = 0.92; const RESIDENTIAL_BUILDING_CHANCE = 0.20;
-        const RESIDENTIAL_HOUSE_CHANCE = 0.55;
+        const DOWNTOWN_BUILDING_CHANCE = 0.95; // Higher chance downtown
+        const RESIDENTIAL_BUILDING_CHANCE = 0.15; // Lower chance in residential
+        const RESIDENTIAL_HOUSE_CHANCE = 0.60; // Higher chance for houses
+        const PARK_STRUCTURE_CHANCE = 0.02; // Very low chance of anything in parks
         // --- Airplane Control & HP ---
         const MIN_SPEED = 5.0; const MAX_SPEED = 100.0; const ACCELERATION = 15.0;
         const ROTATION_SPEED = 0.03; const YAW_SPEED = 0.025;
         const MAX_PITCH = Math.PI / 4; const MAX_ROLL = Math.PI / 3;
         const ROLL_RECOVERY_SPEED = 0.03;
-        const AIRPLANE_COLLISION_SIZE = new THREE.Vector3(8, 3, 7); // Kept small
-        const AIRPLANE_MAX_HP = 300; // Significantly Increased Max HP
-        const COLLISION_DAMAGE = 15; // Significantly Decreased Damage per hit
+        const AIRPLANE_COLLISION_SIZE = new THREE.Vector3(8, 3, 7);
+        const AIRPLANE_MAX_HP = 300; const COLLISION_DAMAGE = 15;
         const LOW_HP_THRESHOLD = AIRPLANE_MAX_HP * 0.35;
         const RESET_COOLDOWN_TIME = 1.0;
-        const COLLISION_DISTANCE_THRESHOLD = 100; // Max distance to check building collision (approx diagonal of cell)
+        const COLLISION_DISTANCE_THRESHOLD = 100;
+        // --- Collectibles ---
+        const COLLECTIBLE_PARTICLES = 80;
+        const COLLECTIBLE_SIZE = 4;
+        const COLLECTIBLE_COLLISION_RADIUS = 6;
+        const COLLECTIBLE_SPAWN_CHANCE = 0.15;
+        const COLLECTIBLE_SCORE_VALUE = 10;
+        // --- Minimap ---
+        const MINIMAP_SIZE = 180; // Match CSS width/height
+        const MINIMAP_SCALE = 0.15; // World units per pixel (smaller value = zoomed out)
+        const MINIMAP_DOT_SIZE = 3; // Size of dots on minimap
         // --- Particle Counts ---
         const BUILDING_PARTICLES = 2800; const HOUSE_WALL_PARTICLES = 600;
         const HOUSE_WINDOW_PARTICLES = 70; const HOUSE_ROOF_PARTICLES = 180;
@@ -189,6 +241,7 @@
         const EXPLOSION_INITIAL_COLOR = new THREE.Color(0xffaa33);
         const FIRE_COLOR_START = new THREE.Color(0xff4500); const FIRE_COLOR_END = new THREE.Color(0xffa500);
         const SMOKE_COLOR = new THREE.Color(0x222222);
+        const COLLECTIBLE_COLOR = new THREE.Color(0x00ffff); // Bright Cyan
         // --- Unit Conversion ---
         const SPEED_UNIT_FACTOR = 1.944; const ALT_UNIT_FACTOR = 3.281;
 
@@ -198,14 +251,16 @@
         let scene, camera, renderer, clock, loadingManager, composer;
         let particleTexture = null; let airplane; let airplaneController;
         let explosionManager; let smokeTrailManager;
-        const activeCells = new Map();
+        const activeCells = new Map(); // Stores { points: Points, type: string, id?: number }[]
         let currentPlayerCellX = Infinity, currentPlayerCellZ = Infinity;
         let isInitializationComplete = false; // Flag to control animation loop updates
+        let score = 0; // Player score
+        let nextCollectibleId = 0; // Unique ID for collectibles
         const zoneNoise = createNoise2D(Math.random); const densityNoise = createNoise2D(Math.random);
         let baseGrassMaterial, baseRoadMaterial, baseTreeCanopyMaterial, baseTreeTrunkMaterial;
         let baseBuildingMaterial, baseHouseWallMaterial, baseHouseWindowMaterial, baseHouseRoofMaterial;
         let baseCarBodyMaterial, baseCarLightMaterial, basePeopleMaterial, baseFlowerMaterial;
-        let baseExplosionMaterial, baseFireMaterial, baseSmokeMaterial;
+        let baseExplosionMaterial, baseFireMaterial, baseSmokeMaterial, baseCollectibleMaterial; // Added collectible material
         const keys = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false, KeyW: false, KeyS: false, KeyA: false, KeyD: false, KeyR: false };
         const loadingOverlay = document.getElementById('loading-overlay');
         const loadingMessage = document.getElementById('loading-message');
@@ -215,15 +270,20 @@
         const altInfoElement = document.getElementById('alt-info');
         const hdgInfoElement = document.getElementById('hdg-info');
         const hpBarElement = document.getElementById('hp-bar');
+        const scoreDisplayElement = document.getElementById('score-display'); // Score element
         const collisionWarningElement = document.getElementById('collision-warning');
         const tempVector3 = new THREE.Vector3(); const forwardVector = new THREE.Vector3();
         const projectedVector = new THREE.Vector3(); const airplaneBBox = new THREE.Box3();
         const buildingBBox = new THREE.Box3(); // Reusable Box3 for building checks
+        const collectibleSphere = new THREE.Sphere(); // Reusable Sphere for collectible checks
+        // Minimap variables
+        let minimapCanvas, minimapCtx;
 
         // ====================================================================
         // Airplane Controller Class
         // ====================================================================
         class AirplaneController {
+             // ... (Implementation remains the same as previous version) ...
              constructor(airplaneObject) {
                  this.airplane = airplaneObject;
                  this.speed = MIN_SPEED;
@@ -272,6 +332,7 @@
                  if (collisionWarningElement) collisionWarningElement.style.display = 'none'; // Check if exists
                  if (loadingStatusElement) loadingStatusElement.textContent = 'Ready'; // Check if exists
                  this.lowHpStateActive = false; // Reset effect state flag
+                 score = 0; // Reset score on reset
                  this.updateHUD();
                  console.log("Airplane Reset.");
              }
@@ -395,6 +456,10 @@
                       else if (hpPercent <= 60) hpBarElement.style.backgroundColor = '#ffcc00'; // Yellowish
                       else hpBarElement.style.backgroundColor = '#4CAF50'; // Green
                   }
+                  // Update score display (moved here for consistency)
+                  if (scoreDisplayElement) {
+                      scoreDisplayElement.textContent = score;
+                  }
              }
         }
 
@@ -402,6 +467,7 @@
         // Explosion Manager Class
         // ====================================================================
         class ExplosionManager {
+              // ... (Implementation remains the same as previous version) ...
               constructor(sceneRef, material) { this.scene = sceneRef; this.baseMaterial = material; this.explosions = []; }
               createExplosion(position) {
                   if (!this.baseMaterial || !clock) { console.error("ExplosionManager cannot create: Missing material or clock."); return; }
@@ -442,6 +508,7 @@
         // Smoke Trail Manager Class
         // ====================================================================
         class SmokeTrailManager {
+               // ... (Implementation remains the same as previous version) ...
                constructor(sceneRef, material) { this.scene = sceneRef; this.baseMaterial = material; this.particles = []; this.maxParticles = 1000; }
                emitParticles(position, count) {
                    if (!this.baseMaterial || !clock) { console.error("SmokeTrailManager cannot emit: Missing material or clock."); return; }
@@ -492,6 +559,7 @@
                  setupCamera();
                  setupLighting();
                  setupAirplane(); // Creates airplane object
+                 setupMinimap(); // Setup minimap canvas
                  loadAssets(); // Starts texture loading via manager
                  setupEventListeners();
                  animate(); // Starts loop, but waits for isInitializationComplete
@@ -526,7 +594,7 @@
                         // Step 2: Initialize Managers
                         setupStep = "Initializing Managers";
                         console.log(`[onLoad] Step: ${setupStep}...`);
-                        if (!baseExplosionMaterial || !baseSmokeMaterial) throw new Error("Effect materials not ready for managers.");
+                        if (!baseExplosionMaterial || !baseSmokeMaterial || !baseCollectibleMaterial) throw new Error("Effect/Collectible materials not ready for managers."); // Added collectible material check
                         explosionManager = new ExplosionManager(scene, baseExplosionMaterial);
                         smokeTrailManager = new SmokeTrailManager(scene, baseSmokeMaterial);
                         console.log(`[onLoad] Step: ${setupStep} - Success.`);
@@ -593,10 +661,22 @@
         }
 
         function setupScene() { scene = new THREE.Scene(); scene.fog = new THREE.FogExp2(0x000000, FOG_DENSITY); scene.background = new THREE.Color(0x000000); clock = new THREE.Clock(); console.log("Scene and Clock created."); }
-        function setupRenderer() { renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" }); renderer.setSize(window.innerWidth, window.innerHeight); renderer.setPixelRatio(window.devicePixelRatio); renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0; renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.shadowMap.enabled = false; document.body.appendChild(renderer.domElement); console.log("Renderer created."); }
+        function setupRenderer() { renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('main-canvas'), antialias: true, powerPreference: "high-performance" }); renderer.setSize(window.innerWidth, window.innerHeight); renderer.setPixelRatio(window.devicePixelRatio); renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0; renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.shadowMap.enabled = false; /* document.body.appendChild(renderer.domElement); // No longer needed */ console.log("Renderer created."); }
         function setupCamera() { camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.5, GROUND_PLANE_SIZE * 0.8); camera.position.set(0, 70, 130); camera.lookAt(0, 0, 0); console.log("Camera created."); }
         function setupLighting() { const ambientLight = new THREE.AmbientLight(0x606060); scene.add(ambientLight); const dirLight = new THREE.DirectionalLight(0xffffff, 0.7); dirLight.position.set(80, 150, 70); scene.add(dirLight); console.log("Lighting created."); }
         function setupAirplane() { airplane = new THREE.Group(); const planeMaterial = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.7, roughness: 0.5, emissive: new THREE.Color(0x00ffff), emissiveIntensity: 0.6 }); const bodyGeometry = new THREE.CylinderGeometry(0.8, 1, 8, 16); const wingGeometry = new THREE.BoxGeometry(8, 0.3, 2); const tailWingGeometry = new THREE.BoxGeometry(3, 0.2, 1); const rudderGeometry = new THREE.BoxGeometry(0.2, 2, 1); const body = new THREE.Mesh(bodyGeometry, planeMaterial); body.rotation.x = Math.PI / 2; airplane.add(body); const leftWing = new THREE.Mesh(wingGeometry, planeMaterial); leftWing.position.set(-4.5, 0, 0); airplane.add(leftWing); const rightWing = new THREE.Mesh(wingGeometry, planeMaterial); rightWing.position.set(4.5, 0, 0); airplane.add(rightWing); const tailWing = new THREE.Mesh(tailWingGeometry, planeMaterial); tailWing.position.set(0, 0, 3.5); airplane.add(tailWing); const rudder = new THREE.Mesh(rudderGeometry, planeMaterial); rudder.position.set(0, 1, 3.5); airplane.add(rudder); airplane.position.set(0, 50, 0); airplane.rotation.order = 'YXZ'; scene.add(airplane); console.log("Airplane object created."); }
+
+        function setupMinimap() {
+            minimapCanvas = document.getElementById('minimap-canvas');
+            if (!minimapCanvas) {
+                console.error("Minimap canvas element not found!");
+                return;
+            }
+            minimapCtx = minimapCanvas.getContext('2d');
+            minimapCanvas.width = MINIMAP_SIZE;
+            minimapCanvas.height = MINIMAP_SIZE;
+            console.log("Minimap setup complete.");
+        }
 
         function loadAssets() {
             const textureLoader = new THREE.TextureLoader(loadingManager);
@@ -633,6 +713,8 @@
              baseExplosionMaterial = new THREE.PointsMaterial({ map: particleTexture, size: 3.0, ...ADDITIVE_BLEND_PROPS, vertexColors: true });
              baseFireMaterial = new THREE.PointsMaterial({ map: particleTexture, size: 1.8, ...ADDITIVE_BLEND_PROPS, vertexColors: true, sizeAttenuation: true });
              baseSmokeMaterial = new THREE.PointsMaterial({ map: particleTexture, size: 3.0, color: SMOKE_COLOR, blending: THREE.NormalBlending, opacity: 0.6, transparent: true, depthWrite: false, sizeAttenuation: true });
+             // Added Collectible Material
+             baseCollectibleMaterial = new THREE.PointsMaterial({ map: particleTexture, size: COLLECTIBLE_SIZE * 0.8, color: COLLECTIBLE_COLOR, blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true, opacity: 0.8, transparent: true });
              console.log("Base materials created.");
         }
         function setupPostProcessing() { console.log("Setting up post-processing..."); composer = new EffectComposer(renderer); const renderPass = new RenderPass(scene, camera); composer.addPass(renderPass); const bloomPass = new UnrealBloomPass( new THREE.Vector2(window.innerWidth, window.innerHeight), 1.1, 0.5, 0.7 ); composer.addPass(bloomPass); console.log("Post-processing setup complete."); }
@@ -641,10 +723,41 @@
         // ====================================================================
         // Particle Generation Functions
         // ====================================================================
-        function createPoints(positions, material, colors = null) { if (!positions || positions.length === 0) return null; try { const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3)); if (colors && colors.length === positions.length && material.vertexColors) { geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3)); } else if (colors && colors.length !== positions.length) { console.warn("Color array length mismatch. Colors ignored."); } else if (colors && !material.vertexColors) { console.warn("Color array provided, but material.vertexColors is false. Colors ignored."); } geometry.computeBoundingSphere(); geometry.computeBoundingBox(); return new THREE.Points(geometry, material); } catch (error) { console.error("Error creating Points object:", error); return null; } } // Added computeBoundingBox()
+        function createPoints(positions, material, colors = null) { if (!positions || positions.length === 0) return null; try { const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3)); if (colors && colors.length === positions.length && material.vertexColors) { geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3)); } else if (colors && colors.length !== positions.length) { console.warn("Color array length mismatch. Colors ignored."); } else if (colors && !material.vertexColors) { console.warn("Color array provided, but material.vertexColors is false. Colors ignored."); } geometry.computeBoundingSphere(); geometry.computeBoundingBox(); return new THREE.Points(geometry, material); } catch (error) { console.error("Error creating Points object:", error); return null; } }
         function generateInfiniteGroundPositions() { const grassPositions = []; const flowerPositions = []; const flowerColorsArray = []; const halfSize = GROUND_PLANE_SIZE / 2; for (let i = 0; i < GROUND_GRASS_PARTICLES; i++) { grassPositions.push( (Math.random() - 0.5) * GROUND_PLANE_SIZE, 0, (Math.random() - 0.5) * GROUND_PLANE_SIZE ); } for (let i = 0; i < GROUND_FLOWER_PARTICLES; i++) { flowerPositions.push( (Math.random() - 0.5) * GROUND_PLANE_SIZE, 0.1, (Math.random() - 0.5) * GROUND_PLANE_SIZE ); const color = getRandomItem(FLOWER_COLORS); flowerColorsArray.push(color.r, color.g, color.b); } return { grassPositions, flowerPositions, flowerColorsArray }; }
         function createInfiniteGround() { if (!baseGrassMaterial || !baseFlowerMaterial) { console.error("Base ground materials not ready for createInfiniteGround."); return; } const { grassPositions, flowerPositions, flowerColorsArray } = generateInfiniteGroundPositions(); const grassPlane = createPoints(grassPositions, baseGrassMaterial); if (grassPlane) { grassPlane.position.set(0, -0.1, 0); scene.add(grassPlane); } if (flowerPositions.length > 0) { const flowerPlane = createPoints(flowerPositions, baseFlowerMaterial, flowerColorsArray); if (flowerPlane) { flowerPlane.position.set(0, 0, 0); scene.add(flowerPlane); } } console.log("Infinite ground created."); }
-        function generateRoadPositions(cellX, cellZ) { const positions = []; const roadWidth = CELL_SIZE * 0.2; const particleDensity = ROAD_PARTICLES_PER_CELL / (CELL_SIZE * roadWidth * 2); const hasNSroad = (Math.abs(cellX) % ROAD_FREQUENCY === 0); const hasEWroad = (Math.abs(cellZ) % ROAD_FREQUENCY === 0); if (hasNSroad) { const count = Math.ceil(CELL_SIZE * roadWidth * particleDensity); for (let i = 0; i < count; i++) { positions.push( (Math.random() - 0.5) * roadWidth, 0, (Math.random() - 0.5) * CELL_SIZE ); } } if (hasEWroad) { const count = Math.ceil(CELL_SIZE * roadWidth * particleDensity); for (let i = 0; i < count; i++) { positions.push( (Math.random() - 0.5) * CELL_SIZE, 0, (Math.random() - 0.5) * roadWidth ); } } if (hasNSroad && hasEWroad) { const count = Math.ceil(roadWidth * roadWidth * particleDensity * 1.5); for (let i = 0; i < count; i++) { positions.push( (Math.random() - 0.5) * roadWidth, 0, (Math.random() - 0.5) * roadWidth ); } } return positions; }
+        function generateRoadPositions(cellX, cellZ) {
+            const positions = [];
+            const roadWidth = CELL_SIZE * 0.2;
+            const particleDensity = ROAD_PARTICLES_PER_CELL / (CELL_SIZE * roadWidth * 2);
+            const isMainRoadNS = (Math.abs(cellX) % MAIN_ROAD_FREQUENCY === 0);
+            const isMainRoadEW = (Math.abs(cellZ) % MAIN_ROAD_FREQUENCY === 0);
+            const isSecondaryRoadNS = (Math.abs(cellX) % SECONDARY_ROAD_FREQUENCY === 0);
+            const isSecondaryRoadEW = (Math.abs(cellZ) % SECONDARY_ROAD_FREQUENCY === 0);
+
+            const hasNSroad = isMainRoadNS || isSecondaryRoadNS;
+            const hasEWroad = isMainRoadEW || isSecondaryRoadEW;
+
+            // Adjust density based on road type (main roads slightly denser)
+            const nsDensityFactor = isMainRoadNS ? 1.2 : 1.0;
+            const ewDensityFactor = isMainRoadEW ? 1.2 : 1.0;
+
+            if (hasNSroad) {
+                const count = Math.ceil(CELL_SIZE * roadWidth * particleDensity * nsDensityFactor);
+                for (let i = 0; i < count; i++) { positions.push( (Math.random() - 0.5) * roadWidth, 0, (Math.random() - 0.5) * CELL_SIZE ); }
+            }
+            if (hasEWroad) {
+                const count = Math.ceil(CELL_SIZE * roadWidth * particleDensity * ewDensityFactor);
+                 for (let i = 0; i < count; i++) { positions.push( (Math.random() - 0.5) * CELL_SIZE, 0, (Math.random() - 0.5) * roadWidth ); }
+            }
+             // Add extra particles at intersections
+             if (hasNSroad && hasEWroad) {
+                 const intersectionDensityFactor = (isMainRoadNS || isMainRoadEW) ? 1.8 : 1.5; // Denser main intersections
+                 const count = Math.ceil(roadWidth * roadWidth * particleDensity * intersectionDensityFactor);
+                 for (let i = 0; i < count; i++) { positions.push( (Math.random() - 0.5) * roadWidth, 0, (Math.random() - 0.5) * roadWidth ); }
+             }
+            return positions;
+        }
         function generateBuildingPositions(maxHeight) { const positions = []; const width = Math.random() * (CELL_SIZE * 0.5) + (CELL_SIZE * 0.15); const depth = Math.random() * (CELL_SIZE * 0.5) + (CELL_SIZE * 0.15); const height = Math.random() * (maxHeight - 30) + 30; const halfW = width / 2; const halfD = depth / 2; for (let i = 0; i < BUILDING_PARTICLES; i++) { const face = Math.floor(Math.random() * 5); let x, y, z; if (face === 0) { x = halfW; y = Math.random() * height; z = (Math.random() - 0.5) * depth; } else if (face === 1) { x = -halfW; y = Math.random() * height; z = (Math.random() - 0.5) * depth; } else if (face === 2) { x = (Math.random() - 0.5) * width; y = height; z = (Math.random() - 0.5) * depth; } else if (face === 3) { x = (Math.random() - 0.5) * width; y = Math.random() * height; z = halfD; } else { x = (Math.random() - 0.5) * width; y = Math.random() * height; z = -halfD; } x += (Math.random() - 0.5) * 0.8; y += (Math.random() - 0.5) * 0.8; z += (Math.random() - 0.5) * 0.8; positions.push(x, y, z); } return { positions }; }
         function generateHousePositions() { const wallPositions = []; const wallColorsArray = []; const windowPositions = []; const roofPositions = []; const roofColorsArray = []; const width = Math.random() * (CELL_SIZE * 0.25) + (CELL_SIZE * 0.1); const depth = Math.random() * (CELL_SIZE * 0.25) + (CELL_SIZE * 0.1); const wallHeight = Math.random() * 8 + 4; const roofPitch = Math.random() * (width * 0.4) + 2; const roofHeight = wallHeight + roofPitch; const halfW = width / 2; const halfD = depth / 2; const wallColor = getRandomItem(HOUSE_WALL_COLORS); const roofColor = getRandomItem(HOUSE_ROOF_COLORS); for (let i = 0; i < HOUSE_WALL_PARTICLES; i++) { const face = Math.floor(Math.random() * 4); let x, y, z; if (face === 0) { x = halfW; y = Math.random() * wallHeight; z = (Math.random() - 0.5) * depth; } else if (face === 1) { x = -halfW; y = Math.random() * wallHeight; z = (Math.random() - 0.5) * depth; } else if (face === 2) { x = (Math.random() - 0.5) * width; y = Math.random() * wallHeight; z = halfD; } else { x = (Math.random() - 0.5) * width; y = Math.random() * wallHeight; z = -halfD; } wallPositions.push(x, y, z); wallColorsArray.push(wallColor.r, wallColor.g, wallColor.b); } for (let i = 0; i < HOUSE_WINDOW_PARTICLES; i++) { const face = Math.floor(Math.random() * 4); let x, y, z; if (face === 0) { x = halfW * 0.99; y = Math.random() * wallHeight * 0.8 + wallHeight * 0.1; z = (Math.random() - 0.5) * depth * 0.8; } else if (face === 1) { x = -halfW * 0.99; y = Math.random() * wallHeight * 0.8 + wallHeight * 0.1; z = (Math.random() - 0.5) * depth * 0.8; } else if (face === 2) { x = (Math.random() - 0.5) * width * 0.8; y = Math.random() * wallHeight * 0.8 + wallHeight * 0.1; z = halfD * 0.99; } else { x = (Math.random() - 0.5) * width * 0.8; y = Math.random() * wallHeight * 0.8 + wallHeight * 0.1; z = -halfD * 0.99; } windowPositions.push(x, y, z); } for (let i = 0; i < HOUSE_ROOF_PARTICLES; i++) { const pz = (Math.random() - 0.5) * depth; const px_norm = Math.random(); const px = (px_norm - 0.5) * width; const py = wallHeight + roofPitch * (1 - Math.abs(px) / halfW); roofPositions.push(px + (Math.random()-0.5)*0.3, py + (Math.random()-0.5)*0.3, pz + (Math.random()-0.5)*0.3); roofColorsArray.push(roofColor.r, roofColor.g, roofColor.b); } return { wallPositions, wallColorsArray, windowPositions, roofPositions, roofColorsArray }; }
         function generateTreePositions() { const canopyPositions = []; const canopyColorsArray = []; const trunkPositions = []; const trunkHeight = Math.random() * 4 + 2; const canopyRadius = Math.random() * 3 + 1.5; const canopyHeightRatio = Math.random() * 1.5 + 0.8; const canopyColor = getRandomItem(TREE_CANOPY_COLORS); for (let i = 0; i < TREE_TRUNK_PARTICLES; i++) { trunkPositions.push(0, (i / TREE_TRUNK_PARTICLES) * trunkHeight, 0); } for (let i = 0; i < TREE_CANOPY_PARTICLES; i++) { const u = Math.random(); const v = Math.random(); const theta = 2 * Math.PI * u; const phi = Math.acos(2 * v - 1); const r = canopyRadius * Math.cbrt(Math.random()); canopyPositions.push( r * Math.sin(phi) * Math.cos(theta), trunkHeight + r * Math.cos(phi) * canopyHeightRatio, r * Math.sin(phi) * Math.sin(theta) ); canopyColorsArray.push(canopyColor.r, canopyColor.g, canopyColor.b); } return { canopyPositions, canopyColorsArray, trunkPositions }; }
@@ -652,11 +765,21 @@
         function generatePeoplePositions() { const positions = []; const colorsArray = []; const personHeight = 1.7; const personWidth = 0.4; const personColor = getRandomItem(PEOPLE_COLORS); for(let i = 0; i < PEOPLE_PARTICLES; i++){ positions.push( (Math.random() - 0.5) * personWidth, (i / PEOPLE_PARTICLES) * personHeight, (Math.random() - 0.5) * personWidth * 0.5 ); colorsArray.push(personColor.r, personColor.g, personColor.b); } return { positions, colorsArray }; }
         function getRandomItem(arr) { if (!arr || arr.length === 0) return null; return arr[Math.floor(Math.random() * arr.length)]; }
 
+        // --- Collectible Generation ---
+        function generateCollectiblePositions() {
+            const positions = [];
+            for (let i = 0; i < COLLECTIBLE_PARTICLES; i++) {
+                 const u=Math.random(), v=Math.random(); const theta=2*Math.PI*u; const phi=Math.acos(2*v-1); const r=COLLECTIBLE_SIZE/2 * Math.cbrt(Math.random());
+                 positions.push( r * Math.sin(phi) * Math.cos(theta), r * Math.cos(phi), r * Math.sin(phi) * Math.sin(theta) );
+            }
+            return positions;
+        }
+
         // ====================================================================
-        // Infinite Grid Update Logic
+        // Infinite Grid Update Logic (Map Gen Enhancements)
         // ====================================================================
         function updateInfiniteGrid() {
-             if (!isInitializationComplete || !airplane) return; // Use the final flag
+             if (!isInitializationComplete || !airplane) return;
              const newPlayerCellX = Math.round(airplane.position.x / CELL_SIZE);
              const newPlayerCellZ = Math.round(airplane.position.z / CELL_SIZE);
              if (newPlayerCellX === currentPlayerCellX && newPlayerCellZ === currentPlayerCellZ) return;
@@ -694,36 +817,60 @@
                  const coords = key.split(',').map(Number);
                  const cellX = coords[0]; const cellZ = coords[1];
                  const cellWorldX = cellX * CELL_SIZE; const cellWorldZ = cellZ * CELL_SIZE;
-                 const zoneVal = zoneNoise(cellX * 0.05, cellZ * 0.05);
-                 const densVal = (densityNoise(cellX * 0.1, cellZ * 0.1) + 1) / 2;
+                 const zoneVal = zoneNoise(cellX * 0.05, cellZ * 0.05); // -1 to 1
+                 const densVal = (densityNoise(cellX * 0.1, cellZ * 0.1) + 1) / 2; // 0 to 1
+
+                 // Determine Zone Type
                  let zoneType = 'residential';
-                 if (zoneVal < -0.35) zoneType = 'park'; else if (zoneVal > 0.35) zoneType = 'downtown';
-                 const cellObjects = []; const isRoadCell = (Math.abs(cellX) % ROAD_FREQUENCY === 0) || (Math.abs(cellZ) % ROAD_FREQUENCY === 0);
+                 if (zoneVal < -0.4) zoneType = 'park'; // Larger park threshold
+                 else if (zoneVal > 0.4) zoneType = 'downtown'; // Larger downtown threshold
+
+                 const cellObjects = [];
+                 // Determine if it's a road cell (main or secondary)
+                 const isMainRoad = (Math.abs(cellX) % MAIN_ROAD_FREQUENCY === 0) || (Math.abs(cellZ) % MAIN_ROAD_FREQUENCY === 0);
+                 const isSecondaryRoad = (Math.abs(cellX) % SECONDARY_ROAD_FREQUENCY === 0) || (Math.abs(cellZ) % SECONDARY_ROAD_FREQUENCY === 0);
+                 const isRoadCell = isMainRoad || isSecondaryRoad;
+
                  let structurePlaced = false;
 
                  // --- Generate Cell Content (with individual try-catch) ---
                  try { // Roads
                      if (isRoadCell && zoneType !== 'park') {
-                         const roadPos = generateRoadPositions(cellX, cellZ);
+                         const roadPos = generateRoadPositions(cellX, cellZ); // Uses hierarchy now
                          const roadSegment = createPoints(roadPos, baseRoadMaterial);
                          if (roadSegment) { roadSegment.position.set(cellWorldX, 0.1, cellWorldZ); scene.add(roadSegment); roadSegment.userData.type = 'road'; cellObjects.push({ points: roadSegment, type: 'road' }); }
                      }
                  } catch (e) { console.error(`Error generating roads for cell ${key}:`, e); }
 
                  try { // Buildings / Houses
-                     if (!isRoadCell || zoneType === 'downtown') {
+                     // Allow structures off-road, or on main roads in downtown
+                     if ((!isRoadCell || (isMainRoad && zoneType === 'downtown')) && zoneType !== 'park') {
                          let placeChance = 0;
-                         if (zoneType === 'downtown') placeChance = 0.95 * densVal; else if (zoneType === 'residential') placeChance = RESIDENTIAL_HOUSE_CHANCE * densVal;
+                         // Downtown: High chance of buildings
+                         if (zoneType === 'downtown') placeChance = DOWNTOWN_BUILDING_CHANCE * densVal;
+                         // Residential: Chance for houses, lower chance for buildings
+                         else if (zoneType === 'residential') placeChance = (RESIDENTIAL_HOUSE_CHANCE + RESIDENTIAL_BUILDING_CHANCE) * densVal;
+
                          if (Math.random() < placeChance) {
                              structurePlaced = true;
                              const offsetX = (Math.random() - 0.5) * CELL_SIZE * 0.7; const offsetZ = (Math.random() - 0.5) * CELL_SIZE * 0.7;
                              const structureWorldX = cellWorldX + offsetX; const structureWorldZ = cellWorldZ + offsetZ;
-                             const isBuilding = (zoneType === 'downtown' && Math.random() < DOWNTOWN_BUILDING_CHANCE) || (zoneType === 'residential' && Math.random() < RESIDENTIAL_BUILDING_CHANCE);
+
+                             // Determine building vs house based on zone and probability
+                             const isBuilding = (zoneType === 'downtown') || (zoneType === 'residential' && Math.random() < (RESIDENTIAL_BUILDING_CHANCE / (RESIDENTIAL_HOUSE_CHANCE + RESIDENTIAL_BUILDING_CHANCE)));
+
                              if (isBuilding) {
-                                 const buildingHeight = 450 * densVal + 70; const buildingPos = generateBuildingPositions(buildingHeight);
+                                 // --- Building Height influenced by Zone & Density ---
+                                 let baseMaxHeight = 100; // Residential base
+                                 if (zoneType === 'downtown') baseMaxHeight = 500;
+                                 // Use zoneVal noise for smoother height transition (-1 to 1) -> (0 to 1)
+                                 const zoneHeightFactor = (zoneVal + 1) / 2; // 0 = park edge, 1 = downtown center
+                                 const maxHeight = (baseMaxHeight * zoneHeightFactor * 0.7 + baseMaxHeight * 0.3) * densVal + 60; // Blend zone influence with base, add density, ensure min height
+
+                                 const buildingPos = generateBuildingPositions(maxHeight);
                                  const building = createPoints(buildingPos.positions, baseBuildingMaterial);
                                  if (building) { building.position.set(structureWorldX, 0, structureWorldZ); scene.add(building); building.userData.type = 'building'; cellObjects.push({ points: building, type: 'building' }); }
-                             } else {
+                             } else { // Must be residential house
                                  const houseData = generateHousePositions();
                                  const houseWalls = createPoints(houseData.wallPositions, baseHouseWallMaterial, houseData.wallColorsArray);
                                  const houseWindows = createPoints(houseData.windowPositions, baseHouseWindowMaterial);
@@ -733,14 +880,25 @@
                                  if (houseRoof) { houseRoof.position.set(structureWorldX, 0, structureWorldZ); scene.add(houseRoof); houseRoof.userData.type = 'house'; cellObjects.push({ points: houseRoof, type: 'house' }); }
                              }
                          }
+                     } else if (zoneType === 'park' && Math.random() < PARK_STRUCTURE_CHANCE) {
+                         // Very small chance for a lone house/shed in a park
+                         structurePlaced = true;
+                         const offsetX = (Math.random() - 0.5) * CELL_SIZE * 0.7; const offsetZ = (Math.random() - 0.5) * CELL_SIZE * 0.7;
+                         const structureWorldX = cellWorldX + offsetX; const structureWorldZ = cellWorldZ + offsetZ;
+                         const houseData = generateHousePositions(); // Generate a small house
+                         const houseWalls = createPoints(houseData.wallPositions, baseHouseWallMaterial, houseData.wallColorsArray);
+                         if (houseWalls) { houseWalls.position.set(structureWorldX, 0, structureWorldZ); scene.add(houseWalls); houseWalls.userData.type = 'house'; cellObjects.push({ points: houseWalls, type: 'house' }); }
                      }
                  } catch(e) { console.error(`Error generating structures for cell ${key}:`, e); }
 
                  try { // Trees
                      let treeChance = 0;
-                     if (zoneType === 'park') treeChance = 0.75 * densVal; else if (zoneType === 'residential') treeChance = 0.18 * densVal;
+                     if (zoneType === 'park') treeChance = 0.85 * densVal; // High chance in parks
+                     else if (zoneType === 'residential' && !isRoadCell) treeChance = 0.30 * densVal; // Moderate chance off-road residential
+                     else if (isRoadCell && zoneType === 'residential') treeChance = 0.10 * densVal; // Lower chance along residential roads
+
                      if (Math.random() < treeChance && !structurePlaced) {
-                         const numTrees = Math.floor(Math.random() * 5 * densVal) + 1;
+                         const numTrees = Math.floor(Math.random() * (zoneType === 'park' ? 8 : 4) * densVal) + 1; // More trees in parks
                          for (let i = 0; i < numTrees; i++) {
                              const treeData = generateTreePositions();
                              const treeCanopy = createPoints(treeData.canopyPositions, baseTreeCanopyMaterial, treeData.canopyColorsArray);
@@ -754,15 +912,20 @@
 
                  try { // Cars
                      if (isRoadCell && zoneType !== 'park') {
-                         const numCars = Math.floor(carsPerRoadCell * Math.random() * densVal * 1.5);
+                         const carDensityFactor = isMainRoad ? 2.0 : 1.0; // More cars on main roads
+                         const numCars = Math.floor(carsPerRoadCell * Math.random() * densVal * carDensityFactor);
                          for(let i = 0; i < numCars; i++) {
                              const carData = generateCarPositions();
                              const carBody = createPoints(carData.bodyPositions, baseCarBodyMaterial, carData.bodyColorsArray);
                              const carLights = createPoints(carData.lightPositions, baseCarLightMaterial);
-                             let carX, carZ; const isNS = (Math.abs(cellX) % ROAD_FREQUENCY === 0); const isEW = (Math.abs(cellZ) % ROAD_FREQUENCY === 0);
-                             if (isNS && !isEW) { carX = cellWorldX + (Math.random() - 0.5) * CELL_SIZE * 0.15; carZ = cellWorldZ + (Math.random() - 0.5) * CELL_SIZE * 0.9; }
-                             else if (!isNS && isEW) { carX = cellWorldX + (Math.random() - 0.5) * CELL_SIZE * 0.9; carZ = cellWorldZ + (Math.random() - 0.5) * CELL_SIZE * 0.15; }
-                             else { carX = cellWorldX + (Math.random() - 0.5) * CELL_SIZE * 0.2; carZ = cellWorldZ + (Math.random() - 0.5) * CELL_SIZE * 0.2; }
+                             let carX, carZ;
+                             if (isMainRoad || isSecondaryRoad) { // Place along road axis
+                                const isNS = (Math.abs(cellX) % SECONDARY_ROAD_FREQUENCY === 0); // Check secondary freq for axis
+                                if (isNS) { carX = cellWorldX + (Math.random() - 0.5) * CELL_SIZE * 0.15; carZ = cellWorldZ + (Math.random() - 0.5) * CELL_SIZE * 0.9; }
+                                else { carX = cellWorldX + (Math.random() - 0.5) * CELL_SIZE * 0.9; carZ = cellWorldZ + (Math.random() - 0.5) * CELL_SIZE * 0.15; }
+                             } else { // Should not happen if isRoadCell is true, but fallback
+                                  carX = cellWorldX + (Math.random() - 0.5) * CELL_SIZE * 0.2; carZ = cellWorldZ + (Math.random() - 0.5) * CELL_SIZE * 0.2;
+                             }
                              const carY = 0.2; const carRotY = Math.random() > 0.5 ? (isNS ? 0 : Math.PI / 2) : (isNS ? Math.PI : -Math.PI/2);
                              if(carBody){ carBody.position.set(carX, carY, carZ); carBody.rotation.y = carRotY; scene.add(carBody); carBody.userData.type = 'car'; cellObjects.push({ points: carBody, type: 'car' }); }
                              if(carLights){ carLights.position.set(carX, carY, carZ); carLights.rotation.y = carRotY; scene.add(carLights); carLights.userData.type = 'car'; cellObjects.push({ points: carLights, type: 'car' }); }
@@ -772,8 +935,11 @@
 
                  try { // People
                      let peopleChance = 0;
-                     if (zoneType === 'downtown') peopleChance = 0.5 * densVal; else if (zoneType === 'residential') peopleChance = 0.35 * densVal;
-                     if (isRoadCell) peopleChance *= 1.5;
+                     if (zoneType === 'downtown') peopleChance = 0.6 * densVal; // More downtown
+                     else if (zoneType === 'residential') peopleChance = 0.4 * densVal;
+                     if (isRoadCell) peopleChance *= 1.5; // More near roads
+                     if (zoneType === 'park') peopleChance = 0.1 * densVal; // Few in parks
+
                      if (Math.random() < peopleChance) {
                         const numPeople = Math.floor(peoplePerCell * Math.random() * densVal);
                         for(let i = 0; i < numPeople; i++) {
@@ -785,59 +951,67 @@
                      }
                  } catch(e) { console.error(`Error generating people for cell ${key}:`, e); }
 
+                 // --- Generate Collectibles ---
+                 try {
+                     if (!isRoadCell && zoneType !== 'park' && Math.random() < COLLECTIBLE_SPAWN_CHANCE) {
+                         const collectiblePos = generateCollectiblePositions();
+                         const collectible = createPoints(collectiblePos, baseCollectibleMaterial);
+                         if (collectible) {
+                             const collX = cellWorldX + (Math.random() - 0.5) * CELL_SIZE * 0.8;
+                             const collZ = cellWorldZ + (Math.random() - 0.5) * CELL_SIZE * 0.8;
+                             const collY = Math.random() * 50 + 20;
+                             collectible.position.set(collX, collY, collZ);
+                             collectible.userData.type = 'collectible';
+                             collectible.userData.id = nextCollectibleId++;
+                             scene.add(collectible);
+                             cellObjects.push({ points: collectible, type: 'collectible', id: collectible.userData.id });
+                         }
+                     }
+                 } catch(e) { console.error(`Error generating collectibles for cell ${key}:`, e); }
+
+
                  activeCells.set(key, cellObjects);
              });
         }
 
         // ====================================================================
-        // Collision Detection (Using BBox vs BBox)
+        // Collision Detection
         // ====================================================================
         function checkCollisions() {
              if (!isInitializationComplete || !airplaneController || airplaneController.isDestroyed) return;
-
-             // Update airplane's world bounding box
              airplaneBBox.setFromCenterAndSize(airplane.position, AIRPLANE_COLLISION_SIZE);
-
-             const checkRadius = 1; // Check current and adjacent cells
+             const checkRadius = 1;
              for (let x = currentPlayerCellX - checkRadius; x <= currentPlayerCellX + checkRadius; x++) {
                  for (let z = currentPlayerCellZ - checkRadius; z <= currentPlayerCellZ + checkRadius; z++) {
-                     const key = `${x},${z}`;
-                     const cellObjects = activeCells.get(key);
+                     const key = `${x},${z}`; const cellObjects = activeCells.get(key);
                      if (!cellObjects) continue;
-
-                     for (const objData of cellObjects) {
-                         // Only check against buildings and houses
-                         if (objData.type !== 'building' && objData.type !== 'house') continue;
-
+                     for (let i = cellObjects.length - 1; i >= 0; i--) { // Iterate backwards for removal
+                         const objData = cellObjects[i];
                          const objPoints = objData.points;
-                         // Ensure the object and its geometry/bounding box exist
-                         if (!objPoints || !objPoints.geometry || !objPoints.geometry.boundingBox) {
-                             // Compute bounding box if it doesn't exist (should have been done in createPoints)
-                             if(objPoints && objPoints.geometry && !objPoints.geometry.boundingBox) {
-                                 objPoints.geometry.computeBoundingBox();
-                                 if(!objPoints.geometry.boundingBox) continue; // Skip if still fails
-                             } else {
-                                continue; // Skip if no geometry
-                             }
-                         }
+                         if (!objPoints || !objPoints.geometry) continue;
 
                          try {
-                             // --- Distance Check ---
-                             const distanceSq = airplane.position.distanceToSquared(objPoints.position);
-                             if (distanceSq > COLLISION_DISTANCE_THRESHOLD * COLLISION_DISTANCE_THRESHOLD) {
-                                 continue; // Skip if object is too far away
+                             // --- Building/House Collision (BBox vs BBox) ---
+                             if (objData.type === 'building' || objData.type === 'house') {
+                                 if (!objPoints.geometry.boundingBox) objPoints.geometry.computeBoundingBox();
+                                 if (!objPoints.geometry.boundingBox) continue;
+                                 const distanceSq = airplane.position.distanceToSquared(objPoints.position);
+                                 if (distanceSq > COLLISION_DISTANCE_THRESHOLD * COLLISION_DISTANCE_THRESHOLD) continue;
+                                 const localBuildingBBox = objPoints.geometry.boundingBox;
+                                 buildingBBox.copy(localBuildingBBox).applyMatrix4(objPoints.matrixWorld);
+                                 if (airplaneBBox.intersectsBox(buildingBBox)) {
+                                     airplaneController.handleCollision(objPoints);
+                                 }
                              }
-
-                             // --- BBox vs BBox Check ---
-                             // Get the building's bounding box in local space
-                             const localBuildingBBox = objPoints.geometry.boundingBox;
-                             // Clone and transform it to world space using the object's matrix
-                             buildingBBox.copy(localBuildingBBox).applyMatrix4(objPoints.matrixWorld);
-
-                             // Check for intersection between airplane's AABB and building's world AABB
-                             if (airplaneBBox.intersectsBox(buildingBBox)) {
-                                 airplaneController.handleCollision(objPoints); // Pass the whole object
-                                 return; // One collision per frame is enough
+                             // --- Collectible Collision (Sphere vs Sphere) ---
+                             else if (objData.type === 'collectible') {
+                                 if (!objPoints.geometry.boundingSphere) objPoints.geometry.computeBoundingSphere();
+                                 if (!objPoints.geometry.boundingSphere) continue;
+                                 collectibleSphere.copy(objPoints.geometry.boundingSphere).applyMatrix4(objPoints.matrixWorld);
+                                 collectibleSphere.radius = COLLECTIBLE_COLLISION_RADIUS;
+                                 if (airplane.position.distanceToSquared(collectibleSphere.center) < collectibleSphere.radius * collectibleSphere.radius) {
+                                     handleCollectibleCollision(objData, key, i); // Pass index
+                                 }
                              }
                          } catch (collisionError) {
                               console.error(`Error checking collision with object in cell ${key}:`, collisionError, objData);
@@ -846,6 +1020,120 @@
                  }
              }
         }
+
+        // ====================================================================
+        // Collectible Handling
+        // ====================================================================
+        function handleCollectibleCollision(collectibleData, cellKey, indexInCell) {
+            console.log(`Collected item ID: ${collectibleData.id} from cell ${cellKey}`);
+            scene.remove(collectibleData.points);
+            if (collectibleData.points.geometry) collectibleData.points.geometry.dispose();
+            const cell = activeCells.get(cellKey);
+            if (cell) { cell.splice(indexInCell, 1); } // Remove item from cell's array
+            score += COLLECTIBLE_SCORE_VALUE;
+            if(airplaneController) airplaneController.updateHUD(); // Update score display
+            if (scoreDisplayElement) { scoreDisplayElement.classList.add('flash'); setTimeout(() => { scoreDisplayElement.classList.remove('flash'); }, 150); }
+        }
+
+        // ====================================================================
+        // Minimap Update Function
+        // ====================================================================
+        function updateMinimap() {
+            if (!isInitializationComplete || !minimapCtx || !airplane) return;
+
+            const ctx = minimapCtx;
+            const mapSize = MINIMAP_SIZE;
+            const scale = MINIMAP_SCALE;
+            const halfMapSize = mapSize / 2;
+
+            // Player position (center of the map)
+            const playerX = airplane.position.x;
+            const playerZ = airplane.position.z;
+
+            // Clear minimap
+            ctx.fillStyle = 'rgba(10, 10, 10, 0.85)'; // Match container background
+            ctx.fillRect(0, 0, mapSize, mapSize);
+
+            // Save context state before transformations
+            ctx.save();
+            // Translate origin to the center of the minimap canvas
+            ctx.translate(halfMapSize, halfMapSize);
+
+            // --- Draw Objects Relative to Player ---
+            const drawRadius = GRID_RADIUS + 2; // Draw slightly more cells than loaded for context
+            for (let x = currentPlayerCellX - drawRadius; x <= currentPlayerCellX + drawRadius; x++) {
+                for (let z = currentPlayerCellZ - drawRadius; z <= currentPlayerCellZ + drawRadius; z++) {
+                    const key = `${x},${z}`;
+                    const cellObjects = activeCells.get(key);
+                    if (!cellObjects) continue;
+
+                    for (const objData of cellObjects) {
+                        if (!objData || !objData.points) continue;
+
+                        const obj = objData.points;
+                        const objWorldX = obj.position.x;
+                        const objWorldZ = obj.position.z;
+
+                        // Calculate position relative to player
+                        const relX = objWorldX - playerX;
+                        const relZ = objWorldZ - playerZ;
+
+                        // Scale to minimap coordinates (Canvas Y corresponds to World Z)
+                        const mapX = relX / scale;
+                        const mapY = relZ / scale; // Map Z to Y
+
+                        // Simple culling (skip drawing if too far off map)
+                        if (Math.abs(mapX) > halfMapSize * 1.5 || Math.abs(mapY) > halfMapSize * 1.5) {
+                            continue;
+                        }
+
+                        // Draw based on type
+                        let color = '#ffffff'; // Default white
+                        let size = MINIMAP_DOT_SIZE;
+
+                        switch (objData.type) {
+                            case 'building': color = '#ffff00'; size = 4; break; // Yellow square
+                            case 'house': color = '#d2691e'; size = 3; break; // Brown square
+                            case 'road': color = '#444444'; size = 2; break; // Dark grey dot
+                            case 'tree': color = '#228b22'; size = 1; break; // Green dot (optional)
+                            case 'collectible': color = '#00ffff'; size = 3; break; // Cyan dot
+                            // Add cases for 'car', 'person' if desired
+                        }
+
+                        ctx.fillStyle = color;
+                        ctx.fillRect(mapX - size / 2, mapY - size / 2, size, size);
+                    }
+                }
+            }
+
+
+            // --- Draw Player ---
+            // Calculate heading angle (using existing projectedVector logic)
+            forwardVector.set(0, 0, -1).applyQuaternion(airplane.quaternion);
+            projectedVector.copy(forwardVector).setY(0).normalize();
+            // Angle needed for canvas rotation (0 is right, positive is clockwise)
+            // atan2(x, z) gives angle from +Z axis, adjust for canvas rotation
+            const headingAngle = Math.atan2(projectedVector.x, projectedVector.z); // Angle from +Z
+
+            ctx.save();
+            ctx.rotate(headingAngle); // Rotate context
+            ctx.fillStyle = '#ffffff'; // White triangle for player
+            ctx.beginPath();
+            ctx.moveTo(0, -5); // Tip of triangle
+            ctx.lineTo(4, 5);
+            ctx.lineTo(-4, 5);
+            ctx.closePath();
+            ctx.fill();
+            ctx.restore(); // Restore rotation
+
+            // Restore main context state
+            ctx.restore();
+
+             // Optional: Draw border around minimap
+             ctx.strokeStyle = '#666';
+             ctx.strokeRect(0, 0, mapSize, mapSize);
+        }
+
 
         // ====================================================================
         // Event Handlers
@@ -859,13 +1147,8 @@
         // ====================================================================
         function animate() {
             requestAnimationFrame(animate);
-            // IMPORTANT: Wait for full initialization before running updates
-            if (!isInitializationComplete) {
-                return;
-            }
-
+            if (!isInitializationComplete) { return; } // Wait for init
             const deltaTime = clock.getDelta();
-
             try {
                 if (airplaneController) airplaneController.update(deltaTime);
                 updateCamera();
@@ -873,13 +1156,10 @@
                 checkCollisions();
                 if (explosionManager) explosionManager.update(deltaTime);
                 if (smokeTrailManager) smokeTrailManager.update(deltaTime);
+                updateMinimap(); // Update the minimap each frame
 
-                if (composer) composer.render(deltaTime);
-                else if (renderer) renderer.render(scene, camera);
-
-            } catch(error) {
-                 console.error("Error during animation loop:", error);
-            }
+                if (composer) composer.render(deltaTime); else if (renderer) renderer.render(scene, camera);
+            } catch(error) { console.error("Error during animation loop:", error); }
         }
 
         // ====================================================================
@@ -894,13 +1174,10 @@
              console.error("Displaying Error:", message);
              if (loadingMessage) loadingMessage.textContent = message;
              if (loadingStatusElement) loadingStatusElement.textContent = "Error!";
-             if (loadingOverlay && loadingOverlay.classList.contains('hidden')) {
-                  loadingOverlay.classList.remove('hidden'); // Ensure overlay is visible
-             }
+             if (loadingOverlay && loadingOverlay.classList.contains('hidden')) { loadingOverlay.classList.remove('hidden'); }
              if (progressBar) progressBar.style.backgroundColor = '#ff0000';
              isInitializationComplete = false; // Halt simulation updates
         }
-
 
         // ====================================================================
         // Start Simulation
